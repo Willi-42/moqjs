@@ -29,3 +29,37 @@ export function encodeVarint(chunk: varint): Uint8Array {
   }
   throw new Error("value too large for varint encoding");
 }
+
+// TODO: move function to different file
+export function encodeUInt16(chunk: number): Uint8Array {
+ if (chunk <= MAX_VAR_INT_2) {
+    const data = new Uint8Array(2);
+    const view = new DataView(data.buffer);
+    view.setUint16(0, chunk);
+    return data;
+  }
+  throw new Error("value too large for varint encoding");
+}
+
+export function encodedVarintLength(chunk: varint): number {
+  if (chunk <= MAX_VAR_INT_1) {
+    return 1;
+  } else if (chunk <= MAX_VAR_INT_2) {
+    return 2;
+  } else if (chunk <= MAX_VAR_INT_4) {
+    return 4;
+  } else if (chunk <= MAX_VAR_INT_8) {
+    return 8;
+  }
+  throw new Error("value too large for varint encoding");
+}
+
+export function encdoedVarintArrayLength(arr: varint[]): number {
+  let total_len: number = 0;
+  for (const v of arr) {
+    total_len += encodedVarintLength(v);
+  }
+
+  return total_len;
+}
+

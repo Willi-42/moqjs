@@ -1,11 +1,12 @@
-import type { varint } from "./varint";
+import { type varint,encodedVarintLength,encdoedVarintArrayLength } from "./varint";
 
 export const DRAFT_IETF_MOQ_TRANSPORT_01 = 0xff000001;
 export const DRAFT_IETF_MOQ_TRANSPORT_02 = 0xff000002;
 export const DRAFT_IETF_MOQ_TRANSPORT_03 = 0xff000003;
 export const DRAFT_IETF_MOQ_TRANSPORT_04 = 0xff000004;
 export const DRAFT_IETF_MOQ_TRANSPORT_05 = 0xff000005;
-export const CURRENT_SUPPORTED_DRAFT = DRAFT_IETF_MOQ_TRANSPORT_05;
+export const DRAFT_IETF_MOQ_TRANSPORT_11 = 0xff00000b;
+export const CURRENT_SUPPORTED_DRAFT = DRAFT_IETF_MOQ_TRANSPORT_11;
 
 export interface MessageEncoder {
   encode(e: Encoder): Promise<void>;
@@ -15,11 +16,12 @@ interface Encoder {
   writeVarint(i: varint): Promise<void>;
   writeBytes(b: Uint8Array): Promise<void>;
   writeString(s: string): Promise<void>;
+  writeUint16(uint: number): Promise<void>;
 }
 
 export enum MessageType {
-  ObjectStream = 0x00,
-  ObjectDatagram = 0x01,
+  ObjectStream = 0x00, // TODO: remove this
+  ObjectDatagram = 0x01, // TODO: remove this
   SubscribeUpdate = 0x02,
   Subscribe = 0x03,
   SubscribeOk = 0x04,
@@ -32,10 +34,10 @@ export enum MessageType {
   SubscribeDone = 0x0b,
   AnnounceCancel = 0x0c,
   GoAway = 0x10,
-  ClientSetup = 0x40,
-  ServerSetup = 0x41,
-  StreamHeaderTrack = 0x50,
-  StreamHeaderGroup = 0x51,
+  ClientSetup = 0x20,
+  ServerSetup = 0x21,
+  StreamHeaderTrack = 0x50, // TODO: remove this
+  StreamHeaderGroup = 0x51, // TODO: remove this
 }
 
 export type Message =
@@ -425,13 +427,22 @@ export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.versions.length);
-    for (const v of this.versions) {
+    await e.writeVarint(this.type); // Typ
+
+    // length
+    let totalLen:number = encodedVarintLength(this.versions.length);
+    totalLen += encdoedVarintArrayLength(this.versions);
+    totalLen += encodedVarintLength(this.parameters.length);
+    totalLen += ParameterEncoder.lengthArray(this.parameters);
+
+    await e.writeUint16(totalLen);
+    
+    await e.writeVarint(this.versions.length); // number of supported versions
+    for (const v of this.versions) { // supported versions
       await e.writeVarint(v);
     }
-    await e.writeVarint(this.parameters.length);
-    for (const p of this.parameters) {
+    await e.writeVarint(this.parameters.length); // number of parameters
+    for (const p of this.parameters) { // parameters
       await new ParameterEncoder(p).encode(e);
     }
   }
@@ -574,4 +585,21 @@ export class ParameterEncoder implements Parameter, MessageEncoder {
     await e.writeVarint(this.value.byteLength);
     await e.writeBytes(this.value);
   }
+
+  static length(p: Parameter):number {
+    let total_len: number = 0;
+    total_len += encodedVarintLength(p.type);
+    total_len += encodedVarintLength(p.value.byteLength);
+    total_len += p.value.byteLength;
+
+    return total_len;
+  } 
+  static lengthArray(arr: Parameter[]):number {
+    let total_len: number = 0;
+    for (const p of arr) {
+      total_len += this.length(p)
+    }
+
+    return total_len;
+  } 
 }

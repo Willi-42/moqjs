@@ -1,4 +1,4 @@
-import { encodeVarint } from "./varint";
+import { encodeUInt16, encodeVarint } from "./varint";
 import type { varint } from "./varint";
 import type { MessageEncoder } from "./messages";
 
@@ -24,6 +24,13 @@ export class Encoder {
   }
 
   async writeBytes(data: Uint8Array): Promise<void> {
+    const writer = this.writer.getWriter();
+    await writer.write(data);
+    writer.releaseLock();
+  }
+
+  async writeUint16(uint: number): Promise<void> {
+    const data = encodeUInt16(uint)
     const writer = this.writer.getWriter();
     await writer.write(data);
     writer.releaseLock();
