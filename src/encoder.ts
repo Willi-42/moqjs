@@ -1,4 +1,4 @@
-import { encodeUInt16, encodeVarint } from "./varint";
+import { appendUInt16, appendUint8Arr, appendVarint } from "./varint";
 import type { varint } from "./varint";
 import type { MessageEncoder } from "./messages";
 
@@ -16,29 +16,20 @@ export class Encoder {
     await chunk.encode(this);
   }
 
-  async writeVarint(i: varint): Promise<void> {
-    const data = encodeVarint(i);
-    const writer = this.writer.getWriter();
-    await writer.write(data);
-    writer.releaseLock();
-  }
-
   async writeBytes(data: Uint8Array): Promise<void> {
     const writer = this.writer.getWriter();
     await writer.write(data);
     writer.releaseLock();
   }
+}
 
-  async writeUint16(uint: number): Promise<void> {
-    const data = encodeUInt16(uint)
-    const writer = this.writer.getWriter();
-    await writer.write(data);
-    writer.releaseLock();
-  }
+export function addHeader(type: varint, bufPayload: Uint8Array): Uint8Array {
+  var bufHeader = new Uint8Array();
+  bufHeader = appendVarint(type, bufHeader);
 
-  async writeString(s: string): Promise<void> {
-    const data = new TextEncoder().encode(s);
-    await this.writeVarint(data.byteLength);
-    await this.writeBytes(data);
-  }
+  const totalLen = bufPayload.byteLength;
+  bufHeader = appendUInt16(totalLen, bufHeader);
+
+  // compose it
+  return appendUint8Arr(bufHeader, bufPayload)
 }

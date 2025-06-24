@@ -1,4 +1,5 @@
-import { type varint,encodedVarintLength,encdoedVarintArrayLength } from "./varint";
+import { addHeader } from "./encoder";
+import { type varint, appendVarint, appendUint8Arr, appendString, appendNumber, appendBytes } from "./varint";
 
 export const DRAFT_IETF_MOQ_TRANSPORT_01 = 0xff000001;
 export const DRAFT_IETF_MOQ_TRANSPORT_02 = 0xff000002;
@@ -13,10 +14,7 @@ export interface MessageEncoder {
 }
 
 interface Encoder {
-  writeVarint(i: varint): Promise<void>;
   writeBytes(b: Uint8Array): Promise<void>;
-  writeString(s: string): Promise<void>;
-  writeUint16(uint: number): Promise<void>;
 }
 
 export enum MessageType {
@@ -36,6 +34,7 @@ export enum MessageType {
   GoAway = 0x10,
   ClientSetup = 0x20,
   ServerSetup = 0x21,
+  RequestBlocked = 0x1A,
   StreamHeaderTrack = 0x50, // TODO: remove this
   StreamHeaderGroup = 0x51, // TODO: remove this
 }
@@ -61,10 +60,10 @@ export type Message =
 
 export interface ObjectMsg {
   type:
-    | MessageType.ObjectStream
-    | MessageType.ObjectDatagram
-    | MessageType.StreamHeaderTrack
-    | MessageType.StreamHeaderGroup;
+  | MessageType.ObjectStream
+  | MessageType.ObjectDatagram
+  | MessageType.StreamHeaderTrack
+  | MessageType.StreamHeaderGroup;
   subscribeId: varint;
   trackAlias: varint;
   groupId: varint;
@@ -74,7 +73,7 @@ export interface ObjectMsg {
   objectPayload: Uint8Array;
 }
 
-export interface ObjectStreamEncoder extends ObjectMsg {}
+export interface ObjectStreamEncoder extends ObjectMsg { }
 
 export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
   constructor(m: ObjectMsg) {
@@ -82,39 +81,44 @@ export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
+    let bufPayload = new Uint8Array();
+
     if (this.type === MessageType.ObjectStream || this.type === MessageType.ObjectDatagram) {
-      await e.writeVarint(this.type);
-      await e.writeVarint(this.subscribeId);
-      await e.writeVarint(this.trackAlias);
-      await e.writeVarint(this.groupId);
-      await e.writeVarint(this.objectId);
-      await e.writeBytes(new Uint8Array([this.publisherPriority]));
-      await e.writeVarint(this.objectStatus);
-      await e.writeBytes(this.objectPayload);
-      return;
+      bufPayload = appendVarint(this.type, bufPayload);
+      bufPayload = appendVarint(this.subscribeId, bufPayload);
+      bufPayload = appendVarint(this.trackAlias, bufPayload);
+      bufPayload = appendVarint(this.groupId, bufPayload);
+      bufPayload = appendVarint(this.objectId, bufPayload);
+      bufPayload = appendNumber(this.publisherPriority, bufPayload);
+      bufPayload = appendVarint(this.objectStatus, bufPayload);
+      bufPayload = appendBytes(this.objectPayload, bufPayload);
     }
     if (this.type === MessageType.StreamHeaderTrack) {
-      await e.writeVarint(this.groupId);
-      await e.writeVarint(this.objectId);
-      await e.writeVarint(this.objectPayload.length);
+      bufPayload = appendVarint(this.groupId, bufPayload);
+      bufPayload = appendVarint(this.objectId, bufPayload);
+      bufPayload = appendVarint(this.objectPayload.length, bufPayload);
       if (this.objectPayload.length === 0) {
-        await e.writeVarint(this.objectStatus);
-        return;
+        bufPayload = appendVarint(this.objectStatus, bufPayload);
       }
-      await e.writeBytes(this.objectPayload);
-      return;
+      else {
+        bufPayload = appendBytes(this.objectPayload, bufPayload);
+      }
+
     }
     if (this.type === MessageType.StreamHeaderGroup) {
-      await e.writeVarint(this.objectId);
-      await e.writeVarint(this.objectPayload.length);
+      bufPayload = appendVarint(this.objectId, bufPayload);
+      bufPayload = appendVarint(this.objectPayload.length, bufPayload);
       if (this.objectPayload.length === 0) {
-        await e.writeVarint(this.objectStatus);
-        return;
+        bufPayload = appendVarint(this.objectStatus, bufPayload);
       }
-      await e.writeBytes(this.objectPayload);
-      return;
+      else {
+        bufPayload = appendBytes(this.objectPayload, bufPayload);
+      }
     }
-    throw new Error(`cannot encode unknown message type ${this.type}`);
+    else {
+      throw new Error(`cannot encode unknown message type ${this.type}`);
+    }
+    e.writeBytes(bufPayload)
   }
 }
 
@@ -133,6 +137,7 @@ export interface Subscribe {
   trackName: string;
   subscriberPriority: number;
   groupOrder: number;
+  forward: number;
   filterType: varint;
   startGroup?: varint;
   startObject?: varint;
@@ -141,7 +146,7 @@ export interface Subscribe {
   subscribeParameters: Parameter[];
 }
 
-export interface SubscribeEncoder extends Subscribe {}
+export interface SubscribeEncoder extends Subscribe { }
 
 export class SubscribeEncoder implements Subscribe, MessageEncoder {
   constructor(m: Subscribe) {
@@ -149,44 +154,48 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.trackAlias);
-    await e.writeString(this.trackNamespace);
-    await e.writeString(this.trackName);
-    await e.writeBytes(new Uint8Array([this.subscriberPriority]));
-    await e.writeBytes(new Uint8Array([this.groupOrder]));
-    await e.writeVarint(this.filterType);
+    let bufPayload = new Uint8Array();
+
+    bufPayload = appendVarint(this.subscribeId, bufPayload); // Request ID
+    bufPayload = appendVarint(this.trackAlias, bufPayload);
+    bufPayload = appendString(this.trackNamespace, bufPayload); // TODO: wrong encoding for the namespace tupel
+    bufPayload = appendString(this.trackName, bufPayload);
+    bufPayload = appendNumber(this.subscriberPriority, bufPayload);
+    bufPayload = appendNumber(this.groupOrder, bufPayload);
+    bufPayload = appendNumber(this.forward, bufPayload);
+    bufPayload = appendVarint(this.filterType, bufPayload);
     if (
       this.filterType === FilterType.AbsoluteStart ||
       this.filterType === FilterType.AbsoluteRange
     ) {
-      await e.writeVarint(this.startGroup || 0);
-      await e.writeVarint(this.startObject || 0);
+      bufPayload = appendVarint(this.startGroup || 0, bufPayload);
+      bufPayload = appendVarint(this.startObject || 0, bufPayload);
     }
     if (this.filterType === FilterType.AbsoluteRange) {
-      await e.writeVarint(this.endGroup || 0);
-      await e.writeVarint(this.endObject || 0);
+      bufPayload = appendVarint(this.endGroup || 0, bufPayload);
+      bufPayload = appendVarint(this.endObject || 0, bufPayload);
     }
-    await e.writeVarint(this.subscribeParameters.length);
+    bufPayload = appendVarint(this.subscribeParameters.length, bufPayload);
     for (const p of this.subscribeParameters) {
-      await new ParameterEncoder(p).encode(e);
+      bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, bufPayload)
+    e.writeBytes(wholePacket)
   }
 }
 
 export interface SubscribeUpdate {
   type: MessageType.SubscribeUpdate;
-  subscribeId: varint;
-  startGroup: varint;
-  startObject: varint;
+  requestID: varint;
+  startLocation: varint; // TODO: what is type of location
   endGroup: varint;
-  endObject: varint;
   subscriberPriority: number;
+  forward: number;
   subscribeParameters: Parameter[];
 }
 
-export interface SubscribeUpdateEncoder extends SubscribeUpdate {}
+export interface SubscribeUpdateEncoder extends SubscribeUpdate { }
 
 export class SubscribeUpdateEncoder implements SubscribeUpdate, MessageEncoder {
   constructor(m: SubscribeUpdate) {
@@ -194,23 +203,27 @@ export class SubscribeUpdateEncoder implements SubscribeUpdate, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.startGroup);
-    await e.writeVarint(this.startObject);
-    await e.writeVarint(this.endGroup);
-    await e.writeVarint(this.endObject);
-    await e.writeBytes(new Uint8Array([this.subscriberPriority]));
-    await e.writeVarint(this.subscribeParameters.length);
+    let bufPayload = new Uint8Array();
+
+    bufPayload = appendVarint(this.requestID, bufPayload);
+    bufPayload = appendVarint(this.startLocation, bufPayload);
+    bufPayload = appendVarint(this.endGroup, bufPayload);
+
+    bufPayload = appendNumber(this.subscriberPriority, bufPayload);
+    bufPayload = appendNumber(this.forward, bufPayload);
+    bufPayload = appendVarint(this.subscribeParameters.length, bufPayload);
     for (const p of this.subscribeParameters) {
-      await new ParameterEncoder(p).encode(e);
+      bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, bufPayload);
+    e.writeBytes(wholePacket);
   }
 }
 
 export interface SubscribeOk {
   type: MessageType.SubscribeOk;
-  subscribeId: varint;
+  requestID: varint;
   expires: varint;
   groupOrder: number;
   contentExists: boolean;
@@ -218,7 +231,7 @@ export interface SubscribeOk {
   finalObject?: varint;
 }
 
-export interface SubscribeOkEncoder extends SubscribeOk {}
+export interface SubscribeOkEncoder extends SubscribeOk { }
 
 export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
   constructor(m: SubscribeOk) {
@@ -226,15 +239,20 @@ export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.expires);
-    await e.writeBytes(new Uint8Array([this.groupOrder]));
-    await e.writeVarint(this.contentExists ? 1 : 0); // TODO: Should use byte instead of varint?
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.requestID, bufPayload);
+    bufPayload = appendVarint(this.expires, bufPayload);
+    bufPayload = appendNumber(this.groupOrder, bufPayload);
+
+    const contentExists: number = this.contentExists ? 1 : 0;
+    bufPayload = appendNumber(contentExists, bufPayload); // TODO: Should use byte instead of varint?
     if (this.contentExists) {
-      await e.writeVarint(this.finalGroup!);
-      await e.writeVarint(this.finalObject!);
+      bufPayload = appendVarint(this.finalGroup!, bufPayload);
+      bufPayload = appendVarint(this.finalObject!, bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, bufPayload);
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -246,7 +264,7 @@ export interface SubscribeError {
   trackAlias: varint;
 }
 
-export interface SubscribeErrorEncoder extends SubscribeError {}
+export interface SubscribeErrorEncoder extends SubscribeError { }
 
 export class SubscribeErrorEncoder implements SubscribeError, MessageEncoder {
   constructor(m: SubscribeError) {
@@ -254,11 +272,15 @@ export class SubscribeErrorEncoder implements SubscribeError, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.errorCode);
-    await e.writeString(this.reasonPhrase);
-    await e.writeVarint(this.trackAlias);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.type, bufPayload);
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+    bufPayload = appendVarint(this.errorCode, bufPayload);
+    bufPayload = appendString(this.reasonPhrase, bufPayload);
+    bufPayload = appendVarint(this.trackAlias, bufPayload);
+
+    const wholePacket = addHeader(this.type, bufPayload);
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -267,7 +289,7 @@ export interface Unsubscribe {
   subscribeId: varint;
 }
 
-export interface UnsubscribeEncoder extends Unsubscribe {}
+export interface UnsubscribeEncoder extends Unsubscribe { }
 
 export class UnsubscribeEncoder implements Unsubscribe, MessageEncoder {
   constructor(m: Unsubscribe) {
@@ -275,8 +297,11 @@ export class UnsubscribeEncoder implements Unsubscribe, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -290,7 +315,7 @@ export interface SubscribeDone {
   finalObject?: varint;
 }
 
-export interface SubscribeDoneEncoder extends SubscribeDone {}
+export interface SubscribeDoneEncoder extends SubscribeDone { }
 
 export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
   constructor(m: SubscribeDone) {
@@ -298,15 +323,20 @@ export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.statusCode);
-    await e.writeString(this.reasonPhrase);
-    await e.writeVarint(this.contentExists ? 1 : 0); // TODO: Should use byte instead of varint?
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+    bufPayload = appendVarint(this.statusCode, bufPayload);
+    bufPayload = appendString(this.reasonPhrase, bufPayload);
+    bufPayload = appendVarint(this.contentExists ? 1 : 0, bufPayload); // TODO: Should use byte instead of varint?
     if (this.contentExists) {
-      await e.writeVarint(this.finalGroup || 0);
-      await e.writeVarint(this.finalObject || 0);
+      bufPayload = appendVarint(this.finalGroup || 0, bufPayload);
+      bufPayload = appendVarint(this.finalObject || 0, bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -316,7 +346,7 @@ export interface Announce {
   parameters: Parameter[];
 }
 
-export interface AnnounceEncoder extends Announce {}
+export interface AnnounceEncoder extends Announce { }
 
 export class AnnounceEncoder implements Announce, MessageEncoder {
   constructor(m: Announce) {
@@ -324,12 +354,15 @@ export class AnnounceEncoder implements Announce, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeString(this.namespace);
-    await e.writeVarint(this.parameters.length);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.namespace, bufPayload);
+    bufPayload = appendVarint(this.parameters.length, bufPayload);
     for (const p of this.parameters) {
-      await new ParameterEncoder(p).encode(e);
+      await new ParameterEncoder(p).append(bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -338,7 +371,7 @@ export interface AnnounceOk {
   trackNamespace: string;
 }
 
-export interface AnnounceOkEncoder extends AnnounceOk {}
+export interface AnnounceOkEncoder extends AnnounceOk { }
 
 export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
   constructor(m: AnnounceOk) {
@@ -346,8 +379,11 @@ export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeString(this.trackNamespace);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.trackNamespace, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -358,7 +394,7 @@ export interface AnnounceError {
   reasonPhrase: string;
 }
 
-export interface AnnounceErrorEncoder extends AnnounceError {}
+export interface AnnounceErrorEncoder extends AnnounceError { }
 
 export class AnnounceErrorEncoder implements AnnounceError, MessageEncoder {
   constructor(m: AnnounceError) {
@@ -366,10 +402,13 @@ export class AnnounceErrorEncoder implements AnnounceError, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeString(this.trackNamespace);
-    await e.writeVarint(this.errorCode);
-    await e.writeString(this.reasonPhrase);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.trackNamespace, bufPayload);
+    bufPayload = appendVarint(this.errorCode, bufPayload);
+    bufPayload = appendString(this.reasonPhrase, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -378,7 +417,7 @@ export interface Unannounce {
   trackNamespace: string;
 }
 
-export interface UnannounceEncoder extends Unannounce {}
+export interface UnannounceEncoder extends Unannounce { }
 
 export class UnannounceEncoder implements Unannounce, MessageEncoder {
   constructor(m: Unannounce) {
@@ -386,8 +425,11 @@ export class UnannounceEncoder implements Unannounce, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeString(this.trackNamespace);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.trackNamespace, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -400,7 +442,7 @@ export interface GoAway {
   newSessionURI: string;
 }
 
-export interface GoAwayEncoder extends GoAway {}
+export interface GoAwayEncoder extends GoAway { }
 
 export class GoAwayEncoder implements GoAway, MessageEncoder {
   constructor(m: GoAway) {
@@ -408,8 +450,11 @@ export class GoAwayEncoder implements GoAway, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeString(this.newSessionURI);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.newSessionURI, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -419,7 +464,7 @@ export interface ClientSetup {
   parameters: Parameter[];
 }
 
-export interface ClientSetupEncoder extends ClientSetup {}
+export interface ClientSetupEncoder extends ClientSetup { }
 
 export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
   constructor(cs: ClientSetup) {
@@ -427,24 +472,20 @@ export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type); // Typ
+    // payload
+    var bufPayload = new Uint8Array();
 
-    // length
-    let totalLen:number = encodedVarintLength(this.versions.length);
-    totalLen += encdoedVarintArrayLength(this.versions);
-    totalLen += encodedVarintLength(this.parameters.length);
-    totalLen += ParameterEncoder.lengthArray(this.parameters);
-
-    await e.writeUint16(totalLen);
-    
-    await e.writeVarint(this.versions.length); // number of supported versions
+    bufPayload = appendVarint(this.versions.length, bufPayload); // number of supported versions
     for (const v of this.versions) { // supported versions
-      await e.writeVarint(v);
+      bufPayload = appendVarint(v, bufPayload);
     }
-    await e.writeVarint(this.parameters.length); // number of parameters
+    bufPayload = appendVarint(this.parameters.length, bufPayload); // number of parameters
     for (const p of this.parameters) { // parameters
-      await new ParameterEncoder(p).encode(e);
+      bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
+
+    const wholePacket = addHeader(this.type, bufPayload)
+    e.writeBytes(wholePacket)
   }
 }
 
@@ -454,12 +495,17 @@ export interface ServerSetup {
   parameters: Parameter[];
 }
 
-export interface ServerSetupEncoder extends ServerSetup {}
+export interface ServerSetupEncoder extends ServerSetup { }
 
 export class ServerSetupEncoder implements ServerSetup {
   constructor(m: ServerSetup) {
     Object.assign(this, m);
   }
+}
+
+export interface RequestsBlocked {
+  type: MessageType.RequestBlocked;
+  maximumRequestID: varint;
 }
 
 export interface StreamHeaderTrack {
@@ -469,20 +515,22 @@ export interface StreamHeaderTrack {
   publisherPriority: number;
 }
 
-export interface StreamHeaderTrackEncoder extends StreamHeaderTrack {}
+export interface StreamHeaderTrackEncoder extends StreamHeaderTrack { }
 
 export class StreamHeaderTrackEncoder
-  implements StreamHeaderTrack, MessageEncoder
-{
+  implements StreamHeaderTrack, MessageEncoder {
   constructor(m: StreamHeaderTrack) {
     Object.assign(this, m);
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.trackAlias);
-    await e.writeBytes(new Uint8Array([this.publisherPriority]));
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+    bufPayload = appendVarint(this.trackAlias, bufPayload);
+    bufPayload = appendNumber(this.publisherPriority, bufPayload);
+
+    const wholePacket = addHeader(this.type, bufPayload)
+    e.writeBytes(wholePacket)
   }
 }
 
@@ -494,24 +542,26 @@ export interface StreamHeaderTrackObject {
 }
 
 export interface StreamHeaderTrackObjectEncoder
-  extends StreamHeaderTrackObject {}
+  extends StreamHeaderTrackObject { }
 
 export class StreamHeaderTrackObjectEncoder
-  implements StreamHeaderTrackObject, MessageEncoder
-{
+  implements StreamHeaderTrackObject, MessageEncoder {
   constructor(m: StreamHeaderTrackObject) {
     Object.assign(this, m);
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.groupId);
-    await e.writeVarint(this.objectId);
-    await e.writeVarint(this.objectPayload.byteLength);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.groupId, bufPayload);
+    bufPayload = appendVarint(this.objectId, bufPayload);
+    bufPayload = appendVarint(this.objectPayload.byteLength, bufPayload);
     if (this.objectPayload.byteLength === 0) {
-      await e.writeVarint(this.objectStatus || 0);
+      bufPayload = appendVarint(this.objectStatus || 0, bufPayload);
     } else {
-      await e.writeBytes(this.objectPayload);
+      bufPayload = appendBytes(this.objectPayload, bufPayload);
     }
+
+    e.writeBytes(bufPayload)
   }
 }
 
@@ -523,21 +573,21 @@ export interface StreamHeaderGroup {
   publisherPriority: number;
 }
 
-export interface StreamHeaderGroupEncoder extends StreamHeaderGroup {}
+export interface StreamHeaderGroupEncoder extends StreamHeaderGroup { }
 
 export class StreamHeaderGroupEncoder
-  implements StreamHeaderGroup, MessageEncoder
-{
+  implements StreamHeaderGroup, MessageEncoder {
   constructor(m: StreamHeaderGroup) {
     Object.assign(this, m);
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.subscribeId);
-    await e.writeVarint(this.trackAlias);
-    await e.writeVarint(this.groupId);
-    await e.writeBytes(new Uint8Array([this.publisherPriority]));
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.subscribeId, bufPayload);
+    bufPayload = appendVarint(this.trackAlias, bufPayload);
+    bufPayload = appendVarint(this.groupId, bufPayload);
+    bufPayload = appendNumber(this.publisherPriority, bufPayload);
+    await e.writeBytes(bufPayload);
   }
 }
 
@@ -548,23 +598,25 @@ export interface StreamHeaderGroupObject {
 }
 
 export interface StreamHeaderGroupObjectEncoder
-  extends StreamHeaderGroupObject {}
+  extends StreamHeaderGroupObject { }
 
 export class StreamHeaderGroupObjectEncoder
-  implements StreamHeaderGroupObject, MessageEncoder
-{
+  implements StreamHeaderGroupObject, MessageEncoder {
   constructor(m: StreamHeaderGroupObject) {
     Object.assign(this, m);
   }
 
   async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.objectId);
-    await e.writeVarint(this.objectPayload.byteLength);
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.objectId, bufPayload);
+    bufPayload = appendVarint(this.objectPayload.byteLength, bufPayload);
     if (this.objectPayload.byteLength === 0) {
-      await e.writeVarint(this.objectStatus || 0);
+      bufPayload = appendVarint(this.objectStatus || 0, bufPayload);
     } else {
-      await e.writeBytes(this.objectPayload);
+      bufPayload = appendBytes(this.objectPayload, bufPayload);
     }
+
+    await e.writeBytes(bufPayload);
   }
 }
 
@@ -573,33 +625,22 @@ export interface Parameter {
   value: Uint8Array;
 }
 
-export interface ParameterEncoder extends Parameter {}
+export interface ParameterEncoder extends Parameter { }
 
-export class ParameterEncoder implements Parameter, MessageEncoder {
+export class ParameterEncoder implements Parameter {
   constructor(p: Parameter) {
     Object.assign(this, p);
   }
 
-  async encode(e: Encoder): Promise<void> {
-    await e.writeVarint(this.type);
-    await e.writeVarint(this.value.byteLength);
-    await e.writeBytes(this.value);
+  async append(buf: Uint8Array): Promise<Uint8Array> {
+    buf = appendVarint(this.type, buf);
+    buf = appendVarint(this.value.byteLength, buf);
+    buf = appendUint8Arr(buf, this.value);
+
+    return buf
   }
-
-  static length(p: Parameter):number {
-    let total_len: number = 0;
-    total_len += encodedVarintLength(p.type);
-    total_len += encodedVarintLength(p.value.byteLength);
-    total_len += p.value.byteLength;
-
-    return total_len;
-  } 
-  static lengthArray(arr: Parameter[]):number {
-    let total_len: number = 0;
-    for (const p of arr) {
-      total_len += this.length(p)
-    }
-
-    return total_len;
-  } 
 }
+function encodedVarintLength(type: varint) {
+  throw new Error("Function not implemented.");
+}
+

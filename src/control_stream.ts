@@ -7,16 +7,17 @@ import {
 import type { Message, MessageEncoder } from "./messages";
 
 export class ControlStream {
-  reader: ReadableStream<Message>;
+  readerPassedMsgs: ReadableStream<Message>;
   writer: WritableStream<MessageEncoder>;
   onmessage?: (m: Message) => {};
 
   constructor(r: ReadableStream<Message>, w: WritableStream<MessageEncoder>) {
-    this.reader = r;
+    this.readerPassedMsgs = r;
     this.writer = w;
   }
 
   async handshake() {
+    // send ClientSetup
     const writer = this.writer.getWriter();
     await writer.write(
       new ClientSetupEncoder({
@@ -29,8 +30,9 @@ export class ControlStream {
     );
     writer.releaseLock();
 
-    const reader = this.reader.getReader();
-    const { value, done } = await reader.read();
+    // receive ServerSetup
+    const readerPassedMsgs = this.readerPassedMsgs.getReader();
+    const { value, done } = await readerPassedMsgs.read();
     if (done) {
       throw new Error("control stream closed");
     }
@@ -38,12 +40,12 @@ export class ControlStream {
       throw new Error("invalid first message on control stream");
     }
     // TODO: Evaluate server setup message?
-    reader.releaseLock();
+    readerPassedMsgs.releaseLock();
   }
 
   async runReadLoop() {
-    const reader = this.reader.getReader();
-    for (;;) {
+    const reader = this.readerPassedMsgs.getReader();
+    for (; ;) {
       const { value, done } = await reader.read();
       if (done) {
         console.log("control stream closed");

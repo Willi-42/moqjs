@@ -95,7 +95,7 @@ export class Session {
       new ObjectStreamDecoder(stream),
     );
     const reader = messageStream.getReader();
-    for (;;) {
+    for (; ;) {
       const { value, done } = await reader.read();
       if (done) {
         console.log("stream closed");
@@ -122,7 +122,7 @@ export class Session {
   async handle(m: Message) {
     switch (m.type) {
       case MessageType.SubscribeOk:
-        this.subscriptions.get(m.subscribeId)?.subscribeOk();
+        this.subscriptions.get(m.requestID)?.subscribeOk();
     }
   }
 
@@ -142,6 +142,7 @@ export class Session {
         trackName: track,
         subscriberPriority: 0,
         groupOrder: 1,
+        forward: 1,
         filterType: FilterType.LatestGroup,
         subscribeParameters: [],
       }),

@@ -19,6 +19,7 @@ import type {
   SubscribeDone,
   Parameter,
   SubscribeUpdate,
+  RequestsBlocked,
 } from "./messages";
 
 type varint = number | bigint;
@@ -54,7 +55,7 @@ class Decoder {
       if (done) {
         throw new Error("stream closed");
       }
-      buffer = new Uint8Array(value.buffer, value.byteOffset - offset);
+      buffer = new Uint8Array(value.buffer, value.byteOffset - offset, length - offset);
       offset += value.byteLength;
     }
     reader.releaseLock();
@@ -70,7 +71,7 @@ class Decoder {
   async readAll(): Promise<Uint8Array> {
     const reader = this.reader.getReader();
     let buffer = new Uint8Array();
-    for (;;) {
+    for (; ;) {
       const { value, done } = await reader.read();
       if (done) {
         break;
@@ -84,10 +85,21 @@ class Decoder {
     return buffer;
   }
 
+  async readUint16(): Promise<number> {
+    this.buffer = await this.read(this.buffer, 0, 2);
+    if (this.buffer.length !== 2) {
+      throw new Error("readUint16 failed");
+    }
+
+    // TODO: actually use parse field
+    return 42
+  }
+
   async readVarint(): Promise<varint> {
     this.buffer = await this.read(this.buffer, 0, 1);
     if (this.buffer.length !== 1) {
-      throw new Error("readVarint could not read first byte");
+      var errStr = "readVarint could not read first byte. Len: " + this.buffer.length;
+      throw new Error(errStr);
     }
     const prefix = this.buffer[0]! >> 6;
     const length = 1 << prefix;
@@ -147,6 +159,7 @@ class Decoder {
       endGroup = await this.readVarint();
       endObject = await this.readVarint();
     }
+    const forward: number = 42; // TODO
     return {
       type: MessageType.Subscribe,
       subscribeId,
@@ -155,6 +168,7 @@ class Decoder {
       trackName,
       subscriberPriority,
       groupOrder,
+      forward,
       filterType,
       startGroup,
       startObject,
@@ -165,7 +179,7 @@ class Decoder {
   }
 
   async subscribeUpdate(): Promise<SubscribeUpdate> {
-    const subscribeId = await this.readVarint();
+    const requestID = await this.readVarint();
     const startGroup = await this.readVarint();
     const startObject = await this.readVarint();
     const endGroup = await this.readVarint();
@@ -173,18 +187,17 @@ class Decoder {
     const subscriberPriority = (await this.readN(1))[0]!;
     return {
       type: MessageType.SubscribeUpdate,
-      subscribeId,
-      startGroup,
-      startObject,
+      requestID,
+      startLocation: 42, // TODO
       endGroup,
-      endObject,
       subscriberPriority,
+      forward: 42, // TODO
       subscribeParameters: await this.parameters(),
     };
   }
 
   async subscribeOk(): Promise<SubscribeOk> {
-    const subscribeId = await this.readVarint();
+    const requestID = await this.readVarint();
     const expires = await this.readVarint();
     const groupOrder = (await this.readN(1))[0]!;
     const contentExists = (await this.readVarint()) == 1;
@@ -196,7 +209,7 @@ class Decoder {
     }
     return {
       type: MessageType.SubscribeOk,
-      subscribeId,
+      requestID,
       expires,
       groupOrder,
       contentExists,
@@ -283,10 +296,23 @@ class Decoder {
   }
 
   async serverSetup(): Promise<ServerSetup> {
+    var selectedVersion = await this.readVarint();
+    var parameter = await this.parameters();
+
     return {
       type: MessageType.ServerSetup,
-      selectedVersion: await this.readVarint(),
-      parameters: await this.parameters(),
+      selectedVersion: selectedVersion,
+      parameters: parameter,
+    };
+  }
+
+  async requstsBlocked(): Promise<RequestsBlocked> {
+    var maxReqID = await this.readVarint();
+    console.log("Request blocked: " + maxReqID)
+
+    return {
+      type: MessageType.RequestBlocked,
+      maximumRequestID: maxReqID,
     };
   }
 
@@ -368,22 +394,33 @@ class Decoder {
 
   async parameter(): Promise<Parameter> {
     const type = await this.readVarint();
-    const length = await this.readVarint();
-    if (length > Number.MAX_VALUE) {
-      throw new Error(
-        `cannot read more then ${Number.MAX_VALUE} bytes from stream`
-      );
+
+    // odd type -> have length fieled
+    if (<number>type % 2 == 1) {
+      const length = await this.readVarint();
+      if (length > Number.MAX_VALUE) {
+        throw new Error(
+          `cannot read more then ${Number.MAX_VALUE} bytes from stream`
+        );
+      }
+      return {
+        type: type,
+        value: await this.readN(<number>length),
+      };
     }
+
+    // even length -> single value
+    const value = await this.readVarint();
     return {
       type: type,
-      value: await this.readN(<number>length),
+      value: new Uint8Array(), // TODO: use value
     };
   }
 
   async parameters(): Promise<Parameter[]> {
-    const num = await this.readVarint();
+    const numOfParameters = await this.readVarint();
     const parameters = [];
-    for (let i = 0; i < num; i++) {
+    for (let i = 0; i < numOfParameters; i++) {
       parameters.push(await this.parameter());
     }
     return parameters;
@@ -392,8 +429,11 @@ class Decoder {
 
 export class ControlStreamDecoder extends Decoder {
   async pull(controller: ReadableStreamDefaultController): Promise<void> {
-    const mt = await this.readVarint();
-    switch (mt) {
+
+    const msgType = await this.readVarint();
+    await this.readUint16() // length field
+
+    switch (msgType) {
       case MessageType.Subscribe:
         return controller.enqueue(await this.subscribe());
       case MessageType.SubscribeUpdate:
@@ -418,8 +458,10 @@ export class ControlStreamDecoder extends Decoder {
         return controller.enqueue(await this.goAway());
       case MessageType.ServerSetup:
         return controller.enqueue(await this.serverSetup());
+      case MessageType.RequestBlocked:
+        return controller.enqueue(await this.requstsBlocked());
     }
-    throw new Error(`unexpected message type: ${mt}`);
+    throw new Error(`unexpected message type: ${msgType}`);
   }
 }
 
@@ -468,6 +510,8 @@ export class ObjectStreamDecoder extends Decoder {
         objectPayload: o.objectPayload,
       });
     }
+
+    // fist message in stream
 
     const mt = await this.readVarint();
     console.log("decoding message type", mt);
