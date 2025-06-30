@@ -1,7 +1,6 @@
-import { FilterType, MessageType } from "./messages";
+import { FilterType, ControlMessageType } from "./control_messages";
 
 import type {
-  ObjectMsg,
   Subscribe,
   SubscribeOk,
   SubscribeError,
@@ -12,22 +11,18 @@ import type {
   Unsubscribe,
   GoAway,
   ServerSetup,
-  StreamHeaderTrack,
-  StreamHeaderTrackObject,
-  StreamHeaderGroup,
-  StreamHeaderGroupObject,
   SubscribeDone,
   Parameter,
   SubscribeUpdate,
   RequestsBlocked,
-} from "./messages";
+} from "./control_messages";
+import { StreamHeaderType, type ObjectMessage, type ObjectMsgWithHeader } from "./object_messages";
 
 type varint = number | bigint;
 
 enum EncoderState {
   Init,
-  TrackStream,
-  GroupStream,
+  Ready,
 }
 
 class Decoder {
@@ -53,7 +48,7 @@ class Decoder {
       );
       const { value, done } = await reader.read(buf);
       if (done) {
-        throw new Error("stream closed");
+        throw new Error("stream closed (decoder)");
       }
       buffer = new Uint8Array(value.buffer, value.byteOffset - offset, length - offset);
       offset += value.byteLength;
@@ -123,19 +118,6 @@ class Decoder {
     throw new Error("invalid varint length");
   }
 
-  async objectStream(): Promise<ObjectMsg> {
-    return {
-      type: MessageType.ObjectStream,
-      subscribeId: await this.readVarint(),
-      trackAlias: await this.readVarint(),
-      groupId: await this.readVarint(),
-      objectId: await this.readVarint(),
-      publisherPriority: (await this.readN(1))[0]!,
-      objectStatus: await this.readVarint(),
-      objectPayload: await this.readAll(),
-    };
-  }
-
   async subscribe(): Promise<Subscribe> {
     const subscribeId = await this.readVarint();
     const trackAlias = await this.readVarint();
@@ -161,7 +143,7 @@ class Decoder {
     }
     const forward: number = 42; // TODO
     return {
-      type: MessageType.Subscribe,
+      type: ControlMessageType.Subscribe,
       subscribeId,
       trackAlias,
       trackNamespace,
@@ -186,7 +168,7 @@ class Decoder {
     const endObject = await this.readVarint();
     const subscriberPriority = (await this.readN(1))[0]!;
     return {
-      type: MessageType.SubscribeUpdate,
+      type: ControlMessageType.SubscribeUpdate,
       requestID,
       startLocation: 42, // TODO
       endGroup,
@@ -208,7 +190,7 @@ class Decoder {
       finalObject = await this.readVarint();
     }
     return {
-      type: MessageType.SubscribeOk,
+      type: ControlMessageType.SubscribeOk,
       requestID,
       expires,
       groupOrder,
@@ -220,7 +202,7 @@ class Decoder {
 
   async subscribeError(): Promise<SubscribeError> {
     return {
-      type: MessageType.SubscribeError,
+      type: ControlMessageType.SubscribeError,
       subscribeId: await this.readVarint(),
       errorCode: await this.readVarint(),
       reasonPhrase: await this.string(),
@@ -230,7 +212,7 @@ class Decoder {
 
   async announce(): Promise<Announce> {
     return {
-      type: MessageType.Announce,
+      type: ControlMessageType.Announce,
       namespace: await this.string(),
       parameters: await this.parameters(),
     };
@@ -238,14 +220,14 @@ class Decoder {
 
   async announceOk(): Promise<AnnounceOk> {
     return {
-      type: MessageType.AnnounceOk,
+      type: ControlMessageType.AnnounceOk,
       trackNamespace: await this.string(),
     };
   }
 
   async announceError(): Promise<AnnounceError> {
     return {
-      type: MessageType.AnnounceError,
+      type: ControlMessageType.AnnounceError,
       trackNamespace: await this.string(),
       errorCode: await this.readVarint(),
       reasonPhrase: await this.string(),
@@ -254,14 +236,14 @@ class Decoder {
 
   async unannounce(): Promise<Unannounce> {
     return {
-      type: MessageType.Unannounce,
+      type: ControlMessageType.Unannounce,
       trackNamespace: await this.string(),
     };
   }
 
   async unsubscribe(): Promise<Unsubscribe> {
     return {
-      type: MessageType.Unsubscribe,
+      type: ControlMessageType.Unsubscribe,
       subscribeId: await this.readVarint(),
     };
   }
@@ -278,7 +260,7 @@ class Decoder {
       finalObject = await this.readVarint();
     }
     return {
-      type: MessageType.SubscribeDone,
+      type: ControlMessageType.SubscribeDone,
       subscribeId,
       statusCode,
       reasonPhrase,
@@ -290,7 +272,7 @@ class Decoder {
 
   async goAway(): Promise<GoAway> {
     return {
-      type: MessageType.GoAway,
+      type: ControlMessageType.GoAway,
       newSessionURI: await this.string(),
     };
   }
@@ -300,7 +282,7 @@ class Decoder {
     var parameter = await this.parameters();
 
     return {
-      type: MessageType.ServerSetup,
+      type: ControlMessageType.ServerSetup,
       selectedVersion: selectedVersion,
       parameters: parameter,
     };
@@ -311,71 +293,34 @@ class Decoder {
     console.log("Request blocked: " + maxReqID)
 
     return {
-      type: MessageType.RequestBlocked,
+      type: ControlMessageType.RequestBlocked,
       maximumRequestID: maxReqID,
     };
   }
 
-  async streamHeaderTrack(): Promise<StreamHeaderTrack> {
-    return {
-      type: MessageType.StreamHeaderTrack,
-      subscribeId: await this.readVarint(),
-      trackAlias: await this.readVarint(),
-      publisherPriority: (await this.readN(1))[0]!,
-    };
-  }
-
-  async streamHeaderTrackObject(): Promise<StreamHeaderTrackObject> {
-    const groupId = await this.readVarint();
+  async streamObject(extensions: boolean): Promise<ObjectMessage> {
     const objectId = await this.readVarint();
+
+    // read extensions
+    if (extensions) {
+      const length = await this.readVarint();
+      await this.readN(<number>length);
+
+      // TODO: do something with it
+    }
+
     const length = await this.readVarint();
     if (length > Number.MAX_VALUE) {
       throw new Error(
         `cannot read more then ${Number.MAX_VALUE} bytes from stream`
       );
     }
-    let objectStatus;
+    let objectStatus: varint = 0;
     if (length === 0) {
       objectStatus = await this.readVarint();
     }
     return {
-      groupId,
       objectId,
-      objectStatus,
-      objectPayload: await this.readN(<number>length),
-    };
-  }
-
-  async streamHeaderGroup(): Promise<StreamHeaderGroup> {
-    return {
-      type: MessageType.StreamHeaderGroup,
-      subscribeId: await this.readVarint(),
-      trackAlias: await this.readVarint(),
-      groupId: await this.readVarint(),
-      publisherPriority: (await this.readN(1))[0]!,
-    };
-  }
-
-  async streamHeaderGroupObject(): Promise<StreamHeaderGroupObject | null> {
-    let objectId;
-    try {
-      // stream can be closed if the peer is done sending all objects
-      objectId = await this.readVarint();
-    } catch (err) {
-      return null;
-    }
-    const length = await this.readVarint();
-    if (length > Number.MAX_VALUE) {
-      throw new Error(
-        `cannot read more then ${Number.MAX_VALUE} bytes from stream`
-      );
-    }
-    let objectStatus;
-    if (length === 0) {
-      objectStatus = await this.readVarint();
-    }
-    return {
-      objectId: objectId,
       objectStatus,
       objectPayload: await this.readN(<number>length),
     };
@@ -434,31 +379,31 @@ export class ControlStreamDecoder extends Decoder {
     await this.readUint16() // length field
 
     switch (msgType) {
-      case MessageType.Subscribe:
+      case ControlMessageType.Subscribe:
         return controller.enqueue(await this.subscribe());
-      case MessageType.SubscribeUpdate:
+      case ControlMessageType.SubscribeUpdate:
         return controller.enqueue(await this.subscribeUpdate());
-      case MessageType.SubscribeOk:
+      case ControlMessageType.SubscribeOk:
         return controller.enqueue(await this.subscribeOk());
-      case MessageType.SubscribeError:
+      case ControlMessageType.SubscribeError:
         return controller.enqueue(await this.subscribeError());
-      case MessageType.Announce:
+      case ControlMessageType.Announce:
         return controller.enqueue(await this.announce());
-      case MessageType.AnnounceOk:
+      case ControlMessageType.AnnounceOk:
         return controller.enqueue(await this.announceOk());
-      case MessageType.AnnounceError:
+      case ControlMessageType.AnnounceError:
         return controller.enqueue(await this.announceError());
-      case MessageType.Unannounce:
+      case ControlMessageType.Unannounce:
         return controller.enqueue(await this.unannounce());
-      case MessageType.Unsubscribe:
+      case ControlMessageType.Unsubscribe:
         return controller.enqueue(await this.unsubscribe());
-      case MessageType.SubscribeDone:
+      case ControlMessageType.SubscribeDone:
         return controller.enqueue(await this.subscribeDone());
-      case MessageType.GoAway:
+      case ControlMessageType.GoAway:
         return controller.enqueue(await this.goAway());
-      case MessageType.ServerSetup:
+      case ControlMessageType.ServerSetup:
         return controller.enqueue(await this.serverSetup());
-      case MessageType.RequestBlocked:
+      case ControlMessageType.RequestBlocked:
         return controller.enqueue(await this.requstsBlocked());
     }
     throw new Error(`unexpected message type: ${msgType}`);
@@ -471,97 +416,97 @@ export class ObjectStreamDecoder extends Decoder {
   trackAlias?: varint;
   groupId?: varint;
   publisherPriority?: number;
+  extensions: boolean;
+  SubIDisFirstObjectID: boolean;
+  NoSubID: boolean;
 
   constructor(stream: ReadableStream<Uint8Array>) {
     super(stream);
     this.state = EncoderState.Init;
+    this.extensions = false;
+    this.SubIDisFirstObjectID = false;
+    this.NoSubID = false;
   }
 
   async pull(
-    controller: ReadableStreamDefaultController<ObjectMsg>
+    controller: ReadableStreamDefaultController<ObjectMsgWithHeader>
   ): Promise<void> {
-    if (this.state === EncoderState.TrackStream) {
-      const o = await this.streamHeaderTrackObject();
+    // already got header
+    if (this.state === EncoderState.Ready) {
+      const o = await this.streamObject(this.extensions);
+
       return controller.enqueue({
-        type: MessageType.StreamHeaderTrack,
-        subscribeId: this.subscribeId!,
-        trackAlias: this.trackAlias!,
-        groupId: o.groupId,
-        objectId: o.objectId,
-        publisherPriority: this.publisherPriority!,
-        objectStatus: 0,
-        objectPayload: o.objectPayload,
-      });
-    }
-    if (this.state === EncoderState.GroupStream) {
-      const o = await this.streamHeaderGroupObject();
-      if (!o) {
-        controller.close();
-        return;
-      }
-      return controller.enqueue({
-        type: MessageType.StreamHeaderGroup,
         subscribeId: this.subscribeId!,
         trackAlias: this.trackAlias!,
         groupId: this.groupId!,
-        objectId: o.objectId,
         publisherPriority: this.publisherPriority!,
-        objectStatus: 0,
-        objectPayload: o.objectPayload,
+        msg: o
       });
     }
 
-    // fist message in stream
+    // first message in stream -> decode header first
 
-    const mt = await this.readVarint();
-    console.log("decoding message type", mt);
+    const rawMt = await this.readVarint();
+    console.log("decoding message type", rawMt);
 
-    if (mt === MessageType.ObjectStream) {
-      controller.enqueue(await this.objectStream());
-      return controller.close();
+    // check if valid message type
+    const headerValuies = Object.values(StreamHeaderType);
+    if (!headerValuies.includes(Number(rawMt))) {
+      throw new Error(`unexpected message type: ${rawMt}`);
     }
 
-    if (mt === MessageType.StreamHeaderTrack) {
-      const header = await this.streamHeaderTrack();
-      this.state = EncoderState.TrackStream;
-      this.subscribeId = header.subscribeId;
-      this.trackAlias = header.trackAlias;
-      this.publisherPriority = header.publisherPriority;
-      const o = await this.streamHeaderTrackObject();
-      return controller.enqueue({
-        type: MessageType.StreamHeaderTrack,
-        subscribeId: this.subscribeId!,
-        trackAlias: this.trackAlias!,
-        groupId: o.groupId,
-        objectId: o.objectId,
-        publisherPriority: this.publisherPriority!,
-        objectStatus: 0,
-        objectPayload: o.objectPayload,
-      });
+    const mt: StreamHeaderType = Number(rawMt);
+
+    if (mt == StreamHeaderType.Fetch) {
+      throw new Error(`Fetch not implemented. Message type: ${rawMt}`);
     }
 
-    if (mt === MessageType.StreamHeaderGroup) {
-      const header = await this.streamHeaderGroup();
-      this.state = EncoderState.GroupStream;
-      this.subscribeId = header.subscribeId;
-      this.trackAlias = header.trackAlias;
-      this.groupId = header.groupId;
-      this.publisherPriority = header.publisherPriority;
-      const o = await this.streamHeaderGroupObject();
-      if (!o) {
-        return;
-      }
-      return controller.enqueue({
-        type: MessageType.StreamHeaderGroup,
-        subscribeId: this.subscribeId!,
-        trackAlias: this.trackAlias!,
-        groupId: this.groupId!,
-        objectId: o.objectId,
-        publisherPriority: this.publisherPriority!,
-        objectStatus: 0,
-        objectPayload: o.objectPayload,
-      });
+    // check if objects have extensions
+    const headerWithExtensions = [
+      StreamHeaderType.SubgroupFirstObjectIDisSubIDwithExtensions,
+      StreamHeaderType.SubgroupNoSubIDwithExtensions,
+      StreamHeaderType.SubgroupSubIDpresentWithExtensions,
+    ];
+
+    if (headerWithExtensions.includes(mt)) {
+      this.extensions = true;
     }
-    throw new Error(`unexpected message type: ${mt}`);
+
+    // check subID type
+    // these types do not include a subID field in the header
+    if (mt === StreamHeaderType.SubgroupNoSubID || mt === StreamHeaderType.SubgroupNoSubIDwithExtensions) {
+      this.NoSubID = true;
+    }
+    if (mt === StreamHeaderType.SubgroupFirstObjectIDisSubID || mt === StreamHeaderType.SubgroupFirstObjectIDisSubIDwithExtensions) {
+      this.SubIDisFirstObjectID = true;
+    }
+
+    // read header fields
+    this.trackAlias = await this.readVarint();
+    this.groupId = await this.readVarint()
+
+    if (!(this.NoSubID && this.SubIDisFirstObjectID)) {
+      this.subscribeId = await this.readVarint()
+    }
+
+    this.publisherPriority = (await this.readN(1))[0]!;
+
+    this.state = EncoderState.Ready;
+
+
+    // already pull first data object
+    const o = await this.streamObject(this.extensions);
+
+    if (this.SubIDisFirstObjectID) {
+      this.subscribeId = o.objectId;
+    }
+
+    return controller.enqueue({
+      subscribeId: this.subscribeId!,
+      trackAlias: this.trackAlias!,
+      groupId: this.groupId,
+      publisherPriority: this.publisherPriority!,
+      msg: o
+    });
   }
 }

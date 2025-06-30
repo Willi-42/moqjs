@@ -1,17 +1,17 @@
 import {
   CURRENT_SUPPORTED_DRAFT,
   ClientSetupEncoder,
-  MessageType,
+  ControlMessageType,
   ParameterEncoder,
-} from "./messages";
-import type { Message, MessageEncoder } from "./messages";
+} from "./control_messages";
+import type { ControlMessage, MessageEncoder } from "./control_messages";
 
 export class ControlStream {
-  readerPassedMsgs: ReadableStream<Message>;
+  readerPassedMsgs: ReadableStream<ControlMessage>;
   writer: WritableStream<MessageEncoder>;
-  onmessage?: (m: Message) => {};
+  onmessage?: (m: ControlMessage) => {};
 
-  constructor(r: ReadableStream<Message>, w: WritableStream<MessageEncoder>) {
+  constructor(r: ReadableStream<ControlMessage>, w: WritableStream<MessageEncoder>) {
     this.readerPassedMsgs = r;
     this.writer = w;
   }
@@ -21,7 +21,7 @@ export class ControlStream {
     const writer = this.writer.getWriter();
     await writer.write(
       new ClientSetupEncoder({
-        type: MessageType.ClientSetup,
+        type: ControlMessageType.ClientSetup,
         versions: [CURRENT_SUPPORTED_DRAFT],
         parameters: [
           new ParameterEncoder({ type: 0, value: new Uint8Array([0x2]) }),
@@ -36,7 +36,7 @@ export class ControlStream {
     if (done) {
       throw new Error("control stream closed");
     }
-    if (value.type != MessageType.ServerSetup) {
+    if (value.type != ControlMessageType.ServerSetup) {
       throw new Error("invalid first message on control stream");
     }
     // TODO: Evaluate server setup message?

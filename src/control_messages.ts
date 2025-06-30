@@ -1,5 +1,5 @@
 import { addHeader } from "./encoder";
-import { type varint, appendVarint, appendUint8Arr, appendString, appendNumber, appendBytes } from "./varint";
+import { type varint, appendVarint, appendUint8Arr, appendString, appendNumber, appendTupleString } from "./varint";
 
 export const DRAFT_IETF_MOQ_TRANSPORT_01 = 0xff000001;
 export const DRAFT_IETF_MOQ_TRANSPORT_02 = 0xff000002;
@@ -9,6 +9,22 @@ export const DRAFT_IETF_MOQ_TRANSPORT_05 = 0xff000005;
 export const DRAFT_IETF_MOQ_TRANSPORT_11 = 0xff00000b;
 export const CURRENT_SUPPORTED_DRAFT = DRAFT_IETF_MOQ_TRANSPORT_11;
 
+export type ControlMessage =
+  | SubscribeUpdate
+  | Subscribe
+  | SubscribeOk
+  | SubscribeError
+  | Announce
+  | AnnounceOk
+  | AnnounceError
+  | Unannounce
+  | Unsubscribe
+  | SubscribeDone
+  | AnnounceCancel
+  | GoAway
+  | ClientSetup
+  | ServerSetup;
+
 export interface MessageEncoder {
   encode(e: Encoder): Promise<void>;
 }
@@ -17,9 +33,7 @@ interface Encoder {
   writeBytes(b: Uint8Array): Promise<void>;
 }
 
-export enum MessageType {
-  ObjectStream = 0x00, // TODO: remove this
-  ObjectDatagram = 0x01, // TODO: remove this
+export enum ControlMessageType {
   SubscribeUpdate = 0x02,
   Subscribe = 0x03,
   SubscribeOk = 0x04,
@@ -35,92 +49,8 @@ export enum MessageType {
   ClientSetup = 0x20,
   ServerSetup = 0x21,
   RequestBlocked = 0x1A,
-  StreamHeaderTrack = 0x50, // TODO: remove this
-  StreamHeaderGroup = 0x51, // TODO: remove this
 }
 
-export type Message =
-  | ObjectMsg
-  | SubscribeUpdate
-  | Subscribe
-  | SubscribeOk
-  | SubscribeError
-  | Announce
-  | AnnounceOk
-  | AnnounceError
-  | Unannounce
-  | Unsubscribe
-  | SubscribeDone
-  | AnnounceCancel
-  | GoAway
-  | ClientSetup
-  | ServerSetup
-  | StreamHeaderTrack
-  | StreamHeaderGroup;
-
-export interface ObjectMsg {
-  type:
-  | MessageType.ObjectStream
-  | MessageType.ObjectDatagram
-  | MessageType.StreamHeaderTrack
-  | MessageType.StreamHeaderGroup;
-  subscribeId: varint;
-  trackAlias: varint;
-  groupId: varint;
-  objectId: varint;
-  publisherPriority: number;
-  objectStatus: varint;
-  objectPayload: Uint8Array;
-}
-
-export interface ObjectStreamEncoder extends ObjectMsg { }
-
-export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
-  constructor(m: ObjectMsg) {
-    Object.assign(this, m);
-  }
-
-  async encode(e: Encoder): Promise<void> {
-    let bufPayload = new Uint8Array();
-
-    if (this.type === MessageType.ObjectStream || this.type === MessageType.ObjectDatagram) {
-      bufPayload = appendVarint(this.type, bufPayload);
-      bufPayload = appendVarint(this.subscribeId, bufPayload);
-      bufPayload = appendVarint(this.trackAlias, bufPayload);
-      bufPayload = appendVarint(this.groupId, bufPayload);
-      bufPayload = appendVarint(this.objectId, bufPayload);
-      bufPayload = appendNumber(this.publisherPriority, bufPayload);
-      bufPayload = appendVarint(this.objectStatus, bufPayload);
-      bufPayload = appendBytes(this.objectPayload, bufPayload);
-    }
-    if (this.type === MessageType.StreamHeaderTrack) {
-      bufPayload = appendVarint(this.groupId, bufPayload);
-      bufPayload = appendVarint(this.objectId, bufPayload);
-      bufPayload = appendVarint(this.objectPayload.length, bufPayload);
-      if (this.objectPayload.length === 0) {
-        bufPayload = appendVarint(this.objectStatus, bufPayload);
-      }
-      else {
-        bufPayload = appendBytes(this.objectPayload, bufPayload);
-      }
-
-    }
-    if (this.type === MessageType.StreamHeaderGroup) {
-      bufPayload = appendVarint(this.objectId, bufPayload);
-      bufPayload = appendVarint(this.objectPayload.length, bufPayload);
-      if (this.objectPayload.length === 0) {
-        bufPayload = appendVarint(this.objectStatus, bufPayload);
-      }
-      else {
-        bufPayload = appendBytes(this.objectPayload, bufPayload);
-      }
-    }
-    else {
-      throw new Error(`cannot encode unknown message type ${this.type}`);
-    }
-    e.writeBytes(bufPayload)
-  }
-}
 
 export enum FilterType {
   LatestGroup = 0x01,
@@ -130,7 +60,7 @@ export enum FilterType {
 }
 
 export interface Subscribe {
-  type: MessageType.Subscribe;
+  type: ControlMessageType.Subscribe;
   subscribeId: varint;
   trackAlias: varint;
   trackNamespace: string;
@@ -158,7 +88,7 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
 
     bufPayload = appendVarint(this.subscribeId, bufPayload); // Request ID
     bufPayload = appendVarint(this.trackAlias, bufPayload);
-    bufPayload = appendString(this.trackNamespace, bufPayload); // TODO: wrong encoding for the namespace tupel
+    bufPayload = appendTupleString(this.trackNamespace, bufPayload);
     bufPayload = appendString(this.trackName, bufPayload);
     bufPayload = appendNumber(this.subscriberPriority, bufPayload);
     bufPayload = appendNumber(this.groupOrder, bufPayload);
@@ -186,7 +116,7 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
 }
 
 export interface SubscribeUpdate {
-  type: MessageType.SubscribeUpdate;
+  type: ControlMessageType.SubscribeUpdate;
   requestID: varint;
   startLocation: varint; // TODO: what is type of location
   endGroup: varint;
@@ -222,7 +152,7 @@ export class SubscribeUpdateEncoder implements SubscribeUpdate, MessageEncoder {
 }
 
 export interface SubscribeOk {
-  type: MessageType.SubscribeOk;
+  type: ControlMessageType.SubscribeOk;
   requestID: varint;
   expires: varint;
   groupOrder: number;
@@ -257,7 +187,7 @@ export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
 }
 
 export interface SubscribeError {
-  type: MessageType.SubscribeError;
+  type: ControlMessageType.SubscribeError;
   subscribeId: varint;
   errorCode: varint;
   reasonPhrase: string;
@@ -285,7 +215,7 @@ export class SubscribeErrorEncoder implements SubscribeError, MessageEncoder {
 }
 
 export interface Unsubscribe {
-  type: MessageType.Unsubscribe;
+  type: ControlMessageType.Unsubscribe;
   subscribeId: varint;
 }
 
@@ -306,7 +236,7 @@ export class UnsubscribeEncoder implements Unsubscribe, MessageEncoder {
 }
 
 export interface SubscribeDone {
-  type: MessageType.SubscribeDone;
+  type: ControlMessageType.SubscribeDone;
   subscribeId: varint;
   statusCode: varint;
   reasonPhrase: string;
@@ -341,7 +271,7 @@ export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
 }
 
 export interface Announce {
-  type: MessageType.Announce;
+  type: ControlMessageType.Announce;
   namespace: string;
   parameters: Parameter[];
 }
@@ -367,7 +297,7 @@ export class AnnounceEncoder implements Announce, MessageEncoder {
 }
 
 export interface AnnounceOk {
-  type: MessageType.AnnounceOk;
+  type: ControlMessageType.AnnounceOk;
   trackNamespace: string;
 }
 
@@ -388,7 +318,7 @@ export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
 }
 
 export interface AnnounceError {
-  type: MessageType.AnnounceError;
+  type: ControlMessageType.AnnounceError;
   trackNamespace: string;
   errorCode: varint;
   reasonPhrase: string;
@@ -413,7 +343,7 @@ export class AnnounceErrorEncoder implements AnnounceError, MessageEncoder {
 }
 
 export interface Unannounce {
-  type: MessageType.Unannounce;
+  type: ControlMessageType.Unannounce;
   trackNamespace: string;
 }
 
@@ -434,11 +364,11 @@ export class UnannounceEncoder implements Unannounce, MessageEncoder {
 }
 
 export interface AnnounceCancel {
-  type: MessageType.AnnounceCancel;
+  type: ControlMessageType.AnnounceCancel;
 }
 
 export interface GoAway {
-  type: MessageType.GoAway;
+  type: ControlMessageType.GoAway;
   newSessionURI: string;
 }
 
@@ -459,7 +389,7 @@ export class GoAwayEncoder implements GoAway, MessageEncoder {
 }
 
 export interface ClientSetup {
-  type: MessageType.ClientSetup;
+  type: ControlMessageType.ClientSetup;
   versions: varint[];
   parameters: Parameter[];
 }
@@ -490,7 +420,7 @@ export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
 }
 
 export interface ServerSetup {
-  type: MessageType.ServerSetup;
+  type: ControlMessageType.ServerSetup;
   selectedVersion: varint;
   parameters: Parameter[];
 }
@@ -504,120 +434,8 @@ export class ServerSetupEncoder implements ServerSetup {
 }
 
 export interface RequestsBlocked {
-  type: MessageType.RequestBlocked;
+  type: ControlMessageType.RequestBlocked;
   maximumRequestID: varint;
-}
-
-export interface StreamHeaderTrack {
-  type: MessageType.StreamHeaderTrack;
-  subscribeId: varint;
-  trackAlias: varint;
-  publisherPriority: number;
-}
-
-export interface StreamHeaderTrackEncoder extends StreamHeaderTrack { }
-
-export class StreamHeaderTrackEncoder
-  implements StreamHeaderTrack, MessageEncoder {
-  constructor(m: StreamHeaderTrack) {
-    Object.assign(this, m);
-  }
-
-  async encode(e: Encoder): Promise<void> {
-    let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(this.subscribeId, bufPayload);
-    bufPayload = appendVarint(this.trackAlias, bufPayload);
-    bufPayload = appendNumber(this.publisherPriority, bufPayload);
-
-    const wholePacket = addHeader(this.type, bufPayload)
-    e.writeBytes(wholePacket)
-  }
-}
-
-export interface StreamHeaderTrackObject {
-  groupId: varint;
-  objectId: varint;
-  objectStatus?: varint;
-  objectPayload: Uint8Array;
-}
-
-export interface StreamHeaderTrackObjectEncoder
-  extends StreamHeaderTrackObject { }
-
-export class StreamHeaderTrackObjectEncoder
-  implements StreamHeaderTrackObject, MessageEncoder {
-  constructor(m: StreamHeaderTrackObject) {
-    Object.assign(this, m);
-  }
-
-  async encode(e: Encoder): Promise<void> {
-    let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(this.groupId, bufPayload);
-    bufPayload = appendVarint(this.objectId, bufPayload);
-    bufPayload = appendVarint(this.objectPayload.byteLength, bufPayload);
-    if (this.objectPayload.byteLength === 0) {
-      bufPayload = appendVarint(this.objectStatus || 0, bufPayload);
-    } else {
-      bufPayload = appendBytes(this.objectPayload, bufPayload);
-    }
-
-    e.writeBytes(bufPayload)
-  }
-}
-
-export interface StreamHeaderGroup {
-  type: MessageType.StreamHeaderGroup;
-  subscribeId: varint;
-  trackAlias: varint;
-  groupId: varint;
-  publisherPriority: number;
-}
-
-export interface StreamHeaderGroupEncoder extends StreamHeaderGroup { }
-
-export class StreamHeaderGroupEncoder
-  implements StreamHeaderGroup, MessageEncoder {
-  constructor(m: StreamHeaderGroup) {
-    Object.assign(this, m);
-  }
-
-  async encode(e: Encoder): Promise<void> {
-    let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(this.subscribeId, bufPayload);
-    bufPayload = appendVarint(this.trackAlias, bufPayload);
-    bufPayload = appendVarint(this.groupId, bufPayload);
-    bufPayload = appendNumber(this.publisherPriority, bufPayload);
-    await e.writeBytes(bufPayload);
-  }
-}
-
-export interface StreamHeaderGroupObject {
-  objectId: varint;
-  objectStatus?: varint;
-  objectPayload: Uint8Array;
-}
-
-export interface StreamHeaderGroupObjectEncoder
-  extends StreamHeaderGroupObject { }
-
-export class StreamHeaderGroupObjectEncoder
-  implements StreamHeaderGroupObject, MessageEncoder {
-  constructor(m: StreamHeaderGroupObject) {
-    Object.assign(this, m);
-  }
-
-  async encode(e: Encoder): Promise<void> {
-    let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(this.objectId, bufPayload);
-    bufPayload = appendVarint(this.objectPayload.byteLength, bufPayload);
-    if (this.objectPayload.byteLength === 0) {
-      bufPayload = appendVarint(this.objectStatus || 0, bufPayload);
-    } else {
-      bufPayload = appendBytes(this.objectPayload, bufPayload);
-    }
-
-    await e.writeBytes(bufPayload);
-  }
 }
 
 export interface Parameter {
@@ -639,8 +457,5 @@ export class ParameterEncoder implements Parameter {
 
     return buf
   }
-}
-function encodedVarintLength(type: varint) {
-  throw new Error("Function not implemented.");
 }
 

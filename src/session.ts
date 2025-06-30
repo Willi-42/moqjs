@@ -3,13 +3,14 @@ import { ControlStreamDecoder, ObjectStreamDecoder } from "./decoder";
 import { Encoder } from "./encoder";
 import {
   FilterType,
-  MessageType,
+  ControlMessageType,
   SubscribeEncoder,
   UnsubscribeEncoder,
-} from "./messages";
+} from "./control_messages";
 import { Subscription } from "./subscription";
-import type { Message, ObjectMsg } from "./messages";
+import type { ControlMessage } from "./control_messages";
 import type { varint } from "./varint";
+import type { ObjectMsg, ObjectMsgWithHeader } from "./object_messages";
 
 // so that tsup doesn't complain when producing the ts declaration file
 type WebTransportReceiveStream = any;
@@ -91,7 +92,7 @@ export class Session {
   // @ts-ignore
   async readIncomingUniStream(stream: WebTransportReceiveStream) {
     console.log("got stream");
-    const messageStream = new ReadableStream<ObjectMsg>(
+    const messageStream = new ReadableStream<ObjectMsgWithHeader>(
       new ObjectStreamDecoder(stream),
     );
     const reader = messageStream.getReader();
@@ -119,13 +120,14 @@ export class Session {
     }
   }
 
-  async handle(m: Message) {
+  async handle(m: ControlMessage) {
     switch (m.type) {
-      case MessageType.SubscribeOk:
+      case ControlMessageType.SubscribeOk:
         this.subscriptions.get(m.requestID)?.subscribeOk();
     }
   }
 
+  // subscribe returns a readableStream that contains all payloads as uint8arrays
   async subscribe(
     namespace: string,
     track: string,
@@ -135,7 +137,7 @@ export class Session {
     this.subscriptions.set(subId, s);
     await this.controlStream.send(
       new SubscribeEncoder({
-        type: MessageType.Subscribe,
+        type: ControlMessageType.Subscribe,
         subscribeId: subId,
         trackAlias: subId,
         trackNamespace: namespace,
@@ -147,7 +149,7 @@ export class Session {
         subscribeParameters: [],
       }),
     );
-    const readableStream = await s.getReadableStream();
+    const readableStream = await s.getReadableStream(); // only returns it when we got sub ok
     return {
       subscribeId: subId,
       readableStream,
@@ -157,7 +159,7 @@ export class Session {
   async unsubscribe(subscribeId: number) {
     this.controlStream.send(
       new UnsubscribeEncoder({
-        type: MessageType.Unsubscribe,
+        type: ControlMessageType.Unsubscribe,
         subscribeId: subscribeId,
       }),
     );

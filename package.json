@@ -22,7 +22,7 @@
   "homepage": "https://github.com/mengelbart/moqjs#readme",
   "devDependencies": {
     "prettier": "^3.3.2",
-    "tsup": "^8.1.0",
+    "tsup": "^8.5.0",
     "typescript": "^5.8.3"
   }
 }

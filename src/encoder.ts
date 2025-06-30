@@ -1,6 +1,6 @@
 import { appendUInt16, appendUint8Arr, appendVarint } from "./varint";
 import type { varint } from "./varint";
-import type { MessageEncoder } from "./messages";
+import type { MessageEncoder } from "./control_messages";
 
 export class Encoder {
   writer: WritableStream<Uint8Array>;

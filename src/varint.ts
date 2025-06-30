@@ -69,6 +69,16 @@ export function appendString(s: string, buf: Uint8Array): Uint8Array {
   return buf
 }
 
+export function appendTupleString(s: string, buf: Uint8Array): Uint8Array {
+  const data = new TextEncoder().encode(s);
+
+  buf = appendVarint(1, buf);
+  buf = appendVarint(data.byteLength, buf);
+  buf = appendUint8Arr(buf, data); // append sting bytes directly
+
+  return buf
+}
+
 export function appendNumber(n: number, buf: Uint8Array): Uint8Array {
   return appendUint8Arr(buf, new Uint8Array([n]));
 }

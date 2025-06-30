@@ -1,4 +1,5 @@
-import type { Message, ObjectMsg } from "./messages";
+import type { ControlMessage } from "./control_messages";
+import type { ObjectMsg, ObjectMsgWithHeader } from "./object_messages";
 import type { varint } from "./varint";
 
 export class Subscription {
@@ -8,7 +9,7 @@ export class Subscription {
     value: ReadableStream<any> | PromiseLike<ReadableStream<any>>,
   ) => void;
   reject!: (reason?: any) => void;
-  subscription: TransformStream<Message, Uint8Array>;
+  subscription: TransformStream<ObjectMsgWithHeader, Uint8Array>;
 
   constructor(id: varint) {
     this.id = id;
@@ -18,10 +19,10 @@ export class Subscription {
     });
     this.subscription = new TransformStream({
       transform: (
-        chunk: ObjectMsg,
+        chunk: ObjectMsgWithHeader,
         controller: TransformStreamDefaultController<Uint8Array>,
       ) => {
-        controller.enqueue(chunk.objectPayload);
+        controller.enqueue(chunk.msg.objectPayload);
       },
     });
   }
