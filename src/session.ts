@@ -1,16 +1,16 @@
-import { ControlStream } from "./control_stream";
-import { ControlStreamDecoder, ObjectStreamDecoder } from "./decoder";
-import { Encoder } from "./encoder";
+import { ControlStream } from "./wire/control_stream";
+import { ControlStreamDecoder, ObjectStreamDecoder } from "./wire/decoder";
+import { Encoder } from "./wire/encoder";
 import {
   FilterType,
   ControlMessageType,
   SubscribeEncoder,
   UnsubscribeEncoder,
-} from "./control_messages";
+} from "./wire/control_messages";
 import { Subscription } from "./subscription";
-import type { ControlMessage } from "./control_messages";
-import type { varint } from "./varint";
-import type { ObjectMsg, ObjectMsgWithHeader } from "./object_messages";
+import type { ControlMessage } from "./wire/control_messages";
+import type { varint } from "./wire/varint";
+import type { ObjectMsgWithHeader } from "./wire/object_messages";
 
 // so that tsup doesn't complain when producing the ts declaration file
 type WebTransportReceiveStream = any;
@@ -67,7 +67,7 @@ export class Session {
 
     const cs = await conn.createBidirectionalStream();
     const decoderStream = new ReadableStream(
-      new ControlStreamDecoder(cs.readable),
+      new ControlStreamDecoder(cs.readable)
     );
     const encoderStream = new WritableStream(new Encoder(cs.writable));
     const controlStream = new ControlStream(decoderStream, encoderStream);
@@ -93,10 +93,10 @@ export class Session {
   async readIncomingUniStream(stream: WebTransportReceiveStream) {
     console.log("got stream");
     const messageStream = new ReadableStream<ObjectMsgWithHeader>(
-      new ObjectStreamDecoder(stream),
+      new ObjectStreamDecoder(stream)
     );
     const reader = messageStream.getReader();
-    for (; ;) {
+    for (;;) {
       const { value, done } = await reader.read();
       if (done) {
         console.log("stream closed");
@@ -105,7 +105,7 @@ export class Session {
       // console.log("got object", value);
       if (!this.subscriptions.has(value.subscribeId)) {
         throw new Error(
-          `got object for unknown subscribeId: ${value.subscribeId}`,
+          `got object for unknown subscribeId: ${value.subscribeId}`
         );
       }
       // console.log(
@@ -130,7 +130,7 @@ export class Session {
   // subscribe returns a readableStream that contains all payloads as uint8arrays
   async subscribe(
     namespace: string,
-    track: string,
+    track: string
   ): Promise<{ subscribeId: number; readableStream: ReadableStream }> {
     const subId = this.nextSubscribeId++;
     const s = new Subscription(subId);
@@ -147,7 +147,7 @@ export class Session {
         forward: 1,
         filterType: FilterType.LatestGroup,
         subscribeParameters: [],
-      }),
+      })
     );
     const readableStream = await s.getReadableStream(); // only returns it when we got sub ok
     return {
@@ -161,7 +161,7 @@ export class Session {
       new UnsubscribeEncoder({
         type: ControlMessageType.Unsubscribe,
         subscribeId: subscribeId,
-      }),
+      })
     );
   }
 }

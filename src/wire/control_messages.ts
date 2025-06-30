@@ -1,5 +1,12 @@
 import { addHeader } from "./encoder";
-import { type varint, appendVarint, appendUint8Arr, appendString, appendNumber, appendTupleString } from "./varint";
+import {
+  type varint,
+  appendVarint,
+  appendUint8Arr,
+  appendString,
+  appendNumber,
+  appendTupleString,
+} from "./varint";
 
 export const DRAFT_IETF_MOQ_TRANSPORT_01 = 0xff000001;
 export const DRAFT_IETF_MOQ_TRANSPORT_02 = 0xff000002;
@@ -48,9 +55,8 @@ export enum ControlMessageType {
   GoAway = 0x10,
   ClientSetup = 0x20,
   ServerSetup = 0x21,
-  RequestBlocked = 0x1A,
+  RequestBlocked = 0x1a,
 }
-
 
 export enum FilterType {
   LatestGroup = 0x01,
@@ -76,7 +82,7 @@ export interface Subscribe {
   subscribeParameters: Parameter[];
 }
 
-export interface SubscribeEncoder extends Subscribe { }
+export interface SubscribeEncoder extends Subscribe {}
 
 export class SubscribeEncoder implements Subscribe, MessageEncoder {
   constructor(m: Subscribe) {
@@ -110,8 +116,8 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
       bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
 
-    const wholePacket = addHeader(this.type, bufPayload)
-    e.writeBytes(wholePacket)
+    const wholePacket = addHeader(this.type, bufPayload);
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -125,7 +131,7 @@ export interface SubscribeUpdate {
   subscribeParameters: Parameter[];
 }
 
-export interface SubscribeUpdateEncoder extends SubscribeUpdate { }
+export interface SubscribeUpdateEncoder extends SubscribeUpdate {}
 
 export class SubscribeUpdateEncoder implements SubscribeUpdate, MessageEncoder {
   constructor(m: SubscribeUpdate) {
@@ -161,7 +167,7 @@ export interface SubscribeOk {
   finalObject?: varint;
 }
 
-export interface SubscribeOkEncoder extends SubscribeOk { }
+export interface SubscribeOkEncoder extends SubscribeOk {}
 
 export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
   constructor(m: SubscribeOk) {
@@ -194,7 +200,7 @@ export interface SubscribeError {
   trackAlias: varint;
 }
 
-export interface SubscribeErrorEncoder extends SubscribeError { }
+export interface SubscribeErrorEncoder extends SubscribeError {}
 
 export class SubscribeErrorEncoder implements SubscribeError, MessageEncoder {
   constructor(m: SubscribeError) {
@@ -219,7 +225,7 @@ export interface Unsubscribe {
   subscribeId: varint;
 }
 
-export interface UnsubscribeEncoder extends Unsubscribe { }
+export interface UnsubscribeEncoder extends Unsubscribe {}
 
 export class UnsubscribeEncoder implements Unsubscribe, MessageEncoder {
   constructor(m: Unsubscribe) {
@@ -245,7 +251,7 @@ export interface SubscribeDone {
   finalObject?: varint;
 }
 
-export interface SubscribeDoneEncoder extends SubscribeDone { }
+export interface SubscribeDoneEncoder extends SubscribeDone {}
 
 export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
   constructor(m: SubscribeDone) {
@@ -276,7 +282,7 @@ export interface Announce {
   parameters: Parameter[];
 }
 
-export interface AnnounceEncoder extends Announce { }
+export interface AnnounceEncoder extends Announce {}
 
 export class AnnounceEncoder implements Announce, MessageEncoder {
   constructor(m: Announce) {
@@ -301,7 +307,7 @@ export interface AnnounceOk {
   trackNamespace: string;
 }
 
-export interface AnnounceOkEncoder extends AnnounceOk { }
+export interface AnnounceOkEncoder extends AnnounceOk {}
 
 export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
   constructor(m: AnnounceOk) {
@@ -324,7 +330,7 @@ export interface AnnounceError {
   reasonPhrase: string;
 }
 
-export interface AnnounceErrorEncoder extends AnnounceError { }
+export interface AnnounceErrorEncoder extends AnnounceError {}
 
 export class AnnounceErrorEncoder implements AnnounceError, MessageEncoder {
   constructor(m: AnnounceError) {
@@ -347,7 +353,7 @@ export interface Unannounce {
   trackNamespace: string;
 }
 
-export interface UnannounceEncoder extends Unannounce { }
+export interface UnannounceEncoder extends Unannounce {}
 
 export class UnannounceEncoder implements Unannounce, MessageEncoder {
   constructor(m: Unannounce) {
@@ -372,7 +378,7 @@ export interface GoAway {
   newSessionURI: string;
 }
 
-export interface GoAwayEncoder extends GoAway { }
+export interface GoAwayEncoder extends GoAway {}
 
 export class GoAwayEncoder implements GoAway, MessageEncoder {
   constructor(m: GoAway) {
@@ -394,7 +400,7 @@ export interface ClientSetup {
   parameters: Parameter[];
 }
 
-export interface ClientSetupEncoder extends ClientSetup { }
+export interface ClientSetupEncoder extends ClientSetup {}
 
 export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
   constructor(cs: ClientSetup) {
@@ -406,16 +412,18 @@ export class ClientSetupEncoder implements ClientSetup, MessageEncoder {
     var bufPayload = new Uint8Array();
 
     bufPayload = appendVarint(this.versions.length, bufPayload); // number of supported versions
-    for (const v of this.versions) { // supported versions
+    for (const v of this.versions) {
+      // supported versions
       bufPayload = appendVarint(v, bufPayload);
     }
     bufPayload = appendVarint(this.parameters.length, bufPayload); // number of parameters
-    for (const p of this.parameters) { // parameters
+    for (const p of this.parameters) {
+      // parameters
       bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
 
-    const wholePacket = addHeader(this.type, bufPayload)
-    e.writeBytes(wholePacket)
+    const wholePacket = addHeader(this.type, bufPayload);
+    e.writeBytes(wholePacket);
   }
 }
 
@@ -425,7 +433,7 @@ export interface ServerSetup {
   parameters: Parameter[];
 }
 
-export interface ServerSetupEncoder extends ServerSetup { }
+export interface ServerSetupEncoder extends ServerSetup {}
 
 export class ServerSetupEncoder implements ServerSetup {
   constructor(m: ServerSetup) {
@@ -443,7 +451,7 @@ export interface Parameter {
   value: Uint8Array;
 }
 
-export interface ParameterEncoder extends Parameter { }
+export interface ParameterEncoder extends Parameter {}
 
 export class ParameterEncoder implements Parameter {
   constructor(p: Parameter) {
@@ -455,7 +463,6 @@ export class ParameterEncoder implements Parameter {
     buf = appendVarint(this.value.byteLength, buf);
     buf = appendUint8Arr(buf, this.value);
 
-    return buf
+    return buf;
   }
 }
-

@@ -1,12 +1,11 @@
-import type { ControlMessage } from "./control_messages";
-import type { ObjectMsg, ObjectMsgWithHeader } from "./object_messages";
-import type { varint } from "./varint";
+import type { ObjectMsgWithHeader } from "./wire/object_messages";
+import type { varint } from "./wire/varint";
 
 export class Subscription {
   id: varint;
   promise: Promise<ReadableStream>;
   resolve!: (
-    value: ReadableStream<any> | PromiseLike<ReadableStream<any>>,
+    value: ReadableStream<any> | PromiseLike<ReadableStream<any>>
   ) => void;
   reject!: (reason?: any) => void;
   subscription: TransformStream<ObjectMsgWithHeader, Uint8Array>;
@@ -20,7 +19,7 @@ export class Subscription {
     this.subscription = new TransformStream({
       transform: (
         chunk: ObjectMsgWithHeader,
-        controller: TransformStreamDefaultController<Uint8Array>,
+        controller: TransformStreamDefaultController<Uint8Array>
       ) => {
         controller.enqueue(chunk.msg.objectPayload);
       },

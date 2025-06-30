@@ -16,7 +16,11 @@ import type {
   SubscribeUpdate,
   RequestsBlocked,
 } from "./control_messages";
-import { StreamHeaderType, type ObjectMessage, type ObjectMsgWithHeader } from "./object_messages";
+import {
+  StreamHeaderType,
+  type ObjectMessage,
+  type ObjectMsgWithHeader,
+} from "./object_messages";
 
 type varint = number | bigint;
 
@@ -50,7 +54,11 @@ class Decoder {
       if (done) {
         throw new Error("stream closed (decoder)");
       }
-      buffer = new Uint8Array(value.buffer, value.byteOffset - offset, length - offset);
+      buffer = new Uint8Array(
+        value.buffer,
+        value.byteOffset - offset,
+        length - offset
+      );
       offset += value.byteLength;
     }
     reader.releaseLock();
@@ -66,7 +74,7 @@ class Decoder {
   async readAll(): Promise<Uint8Array> {
     const reader = this.reader.getReader();
     let buffer = new Uint8Array();
-    for (; ;) {
+    for (;;) {
       const { value, done } = await reader.read();
       if (done) {
         break;
@@ -87,13 +95,14 @@ class Decoder {
     }
 
     // TODO: actually use parse field
-    return 42
+    return 42;
   }
 
   async readVarint(): Promise<varint> {
     this.buffer = await this.read(this.buffer, 0, 1);
     if (this.buffer.length !== 1) {
-      var errStr = "readVarint could not read first byte. Len: " + this.buffer.length;
+      var errStr =
+        "readVarint could not read first byte. Len: " + this.buffer.length;
       throw new Error(errStr);
     }
     const prefix = this.buffer[0]! >> 6;
@@ -290,7 +299,7 @@ class Decoder {
 
   async requstsBlocked(): Promise<RequestsBlocked> {
     var maxReqID = await this.readVarint();
-    console.log("Request blocked: " + maxReqID)
+    console.log("Request blocked: " + maxReqID);
 
     return {
       type: ControlMessageType.RequestBlocked,
@@ -374,9 +383,8 @@ class Decoder {
 
 export class ControlStreamDecoder extends Decoder {
   async pull(controller: ReadableStreamDefaultController): Promise<void> {
-
     const msgType = await this.readVarint();
-    await this.readUint16() // length field
+    await this.readUint16(); // length field
 
     switch (msgType) {
       case ControlMessageType.Subscribe:
@@ -440,7 +448,7 @@ export class ObjectStreamDecoder extends Decoder {
         trackAlias: this.trackAlias!,
         groupId: this.groupId!,
         publisherPriority: this.publisherPriority!,
-        msg: o
+        msg: o,
       });
     }
 
@@ -474,25 +482,30 @@ export class ObjectStreamDecoder extends Decoder {
 
     // check subID type
     // these types do not include a subID field in the header
-    if (mt === StreamHeaderType.SubgroupNoSubID || mt === StreamHeaderType.SubgroupNoSubIDwithExtensions) {
+    if (
+      mt === StreamHeaderType.SubgroupNoSubID ||
+      mt === StreamHeaderType.SubgroupNoSubIDwithExtensions
+    ) {
       this.NoSubID = true;
     }
-    if (mt === StreamHeaderType.SubgroupFirstObjectIDisSubID || mt === StreamHeaderType.SubgroupFirstObjectIDisSubIDwithExtensions) {
+    if (
+      mt === StreamHeaderType.SubgroupFirstObjectIDisSubID ||
+      mt === StreamHeaderType.SubgroupFirstObjectIDisSubIDwithExtensions
+    ) {
       this.SubIDisFirstObjectID = true;
     }
 
     // read header fields
     this.trackAlias = await this.readVarint();
-    this.groupId = await this.readVarint()
+    this.groupId = await this.readVarint();
 
     if (!(this.NoSubID && this.SubIDisFirstObjectID)) {
-      this.subscribeId = await this.readVarint()
+      this.subscribeId = await this.readVarint();
     }
 
     this.publisherPriority = (await this.readN(1))[0]!;
 
     this.state = EncoderState.Ready;
-
 
     // already pull first data object
     const o = await this.streamObject(this.extensions);
@@ -506,7 +519,7 @@ export class ObjectStreamDecoder extends Decoder {
       trackAlias: this.trackAlias!,
       groupId: this.groupId,
       publisherPriority: this.publisherPriority!,
-      msg: o
+      msg: o,
     });
   }
 }

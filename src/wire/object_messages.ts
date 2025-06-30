@@ -2,9 +2,7 @@ import type { MessageEncoder } from "./control_messages";
 import { addHeader, Encoder } from "./encoder";
 import { type varint, appendVarint, appendNumber, appendBytes } from "./varint";
 
-
 export type ObjectMessage = ObjectMsg;
-
 
 export enum DatagramMessageType {
   ObjectDatagram = 0x00,
@@ -17,10 +15,10 @@ export enum StreamHeaderType {
   Fetch = 0x05,
   SubgroupNoSubID = 0x08,
   SubgroupNoSubIDwithExtensions = 0x09,
-  SubgroupFirstObjectIDisSubID = 0x0A,
-  SubgroupFirstObjectIDisSubIDwithExtensions = 0x0B,
+  SubgroupFirstObjectIDisSubID = 0x0a,
+  SubgroupFirstObjectIDisSubIDwithExtensions = 0x0b,
   SubgroupSubIDpresent = 0x0c,
-  SubgroupSubIDpresentWithExtensions = 0x0D
+  SubgroupSubIDpresentWithExtensions = 0x0d,
 }
 
 export interface ObjectMsgWithHeader {
@@ -38,7 +36,7 @@ export interface ObjectMsg {
   objectPayload: Uint8Array;
 }
 
-export interface ObjectStreamEncoder extends ObjectMsg { }
+export interface ObjectStreamEncoder extends ObjectMsg {}
 
 export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
   constructor(m: ObjectMsg) {
