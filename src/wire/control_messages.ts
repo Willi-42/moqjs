@@ -30,7 +30,8 @@ export type ControlMessage =
   | AnnounceCancel
   | GoAway
   | ClientSetup
-  | ServerSetup;
+  | ServerSetup
+  | RequestsBlocked;
 
 export interface MessageEncoder {
   encode(e: Encoder): Promise<void>;
@@ -75,10 +76,8 @@ export interface Subscribe {
   groupOrder: number;
   forward: number;
   filterType: varint;
-  startGroup?: varint;
-  startObject?: varint;
+  startLocation?: LocationMoQ;
   endGroup?: varint;
-  endObject?: varint;
   subscribeParameters: Parameter[];
 }
 
@@ -104,12 +103,12 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
       this.filterType === FilterType.AbsoluteStart ||
       this.filterType === FilterType.AbsoluteRange
     ) {
-      bufPayload = appendVarint(this.startGroup || 0, bufPayload);
-      bufPayload = appendVarint(this.startObject || 0, bufPayload);
+      bufPayload = await new LocationEncoder(this.startLocation!).append(
+        bufPayload
+      );
     }
     if (this.filterType === FilterType.AbsoluteRange) {
       bufPayload = appendVarint(this.endGroup || 0, bufPayload);
-      bufPayload = appendVarint(this.endObject || 0, bufPayload);
     }
     bufPayload = appendVarint(this.subscribeParameters.length, bufPayload);
     for (const p of this.subscribeParameters) {
@@ -124,7 +123,7 @@ export class SubscribeEncoder implements Subscribe, MessageEncoder {
 export interface SubscribeUpdate {
   type: ControlMessageType.SubscribeUpdate;
   requestID: varint;
-  startLocation: varint; // TODO: what is type of location
+  startLocation: LocationMoQ;
   endGroup: varint;
   subscriberPriority: number;
   forward: number;
@@ -142,7 +141,9 @@ export class SubscribeUpdateEncoder implements SubscribeUpdate, MessageEncoder {
     let bufPayload = new Uint8Array();
 
     bufPayload = appendVarint(this.requestID, bufPayload);
-    bufPayload = appendVarint(this.startLocation, bufPayload);
+    bufPayload = await new LocationEncoder(this.startLocation).append(
+      bufPayload
+    );
     bufPayload = appendVarint(this.endGroup, bufPayload);
 
     bufPayload = appendNumber(this.subscriberPriority, bufPayload);
@@ -163,8 +164,8 @@ export interface SubscribeOk {
   expires: varint;
   groupOrder: number;
   contentExists: boolean;
-  finalGroup?: varint;
-  finalObject?: varint;
+  largestLocation?: LocationMoQ;
+  subscribeParameters: Parameter[];
 }
 
 export interface SubscribeOkEncoder extends SubscribeOk {}
@@ -183,8 +184,12 @@ export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
     const contentExists: number = this.contentExists ? 1 : 0;
     bufPayload = appendNumber(contentExists, bufPayload); // TODO: Should use byte instead of varint?
     if (this.contentExists) {
-      bufPayload = appendVarint(this.finalGroup!, bufPayload);
-      bufPayload = appendVarint(this.finalObject!, bufPayload);
+      bufPayload = await new LocationEncoder(this.largestLocation!).append(
+        bufPayload
+      );
+    }
+    for (const p of this.subscribeParameters) {
+      bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }
 
     const wholePacket = addHeader(this.type, bufPayload);
@@ -245,10 +250,8 @@ export interface SubscribeDone {
   type: ControlMessageType.SubscribeDone;
   subscribeId: varint;
   statusCode: varint;
+  streamCount: varint;
   reasonPhrase: string;
-  contentExists: boolean;
-  finalGroup?: varint;
-  finalObject?: varint;
 }
 
 export interface SubscribeDoneEncoder extends SubscribeDone {}
@@ -260,16 +263,11 @@ export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
 
   async encode(e: Encoder): Promise<void> {
     let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(this.subscribeId, bufPayload);
 
     bufPayload = appendVarint(this.subscribeId, bufPayload);
     bufPayload = appendVarint(this.statusCode, bufPayload);
+    bufPayload = appendVarint(this.statusCode, bufPayload);
     bufPayload = appendString(this.reasonPhrase, bufPayload);
-    bufPayload = appendVarint(this.contentExists ? 1 : 0, bufPayload); // TODO: Should use byte instead of varint?
-    if (this.contentExists) {
-      bufPayload = appendVarint(this.finalGroup || 0, bufPayload);
-      bufPayload = appendVarint(this.finalObject || 0, bufPayload);
-    }
 
     const wholePacket = addHeader(this.type, new Uint8Array());
     e.writeBytes(wholePacket);
@@ -278,6 +276,7 @@ export class SubscribeDoneEncoder implements SubscribeDone, MessageEncoder {
 
 export interface Announce {
   type: ControlMessageType.Announce;
+  reqeustID: varint;
   namespace: string;
   parameters: Parameter[];
 }
@@ -291,7 +290,8 @@ export class AnnounceEncoder implements Announce, MessageEncoder {
 
   async encode(e: Encoder): Promise<void> {
     let bufPayload = new Uint8Array();
-    bufPayload = appendString(this.namespace, bufPayload);
+    bufPayload = appendVarint(this.reqeustID, bufPayload);
+    bufPayload = appendTupleString(this.namespace, bufPayload);
     bufPayload = appendVarint(this.parameters.length, bufPayload);
     for (const p of this.parameters) {
       await new ParameterEncoder(p).append(bufPayload);
@@ -304,7 +304,7 @@ export class AnnounceEncoder implements Announce, MessageEncoder {
 
 export interface AnnounceOk {
   type: ControlMessageType.AnnounceOk;
-  trackNamespace: string;
+  reqeustID: varint;
 }
 
 export interface AnnounceOkEncoder extends AnnounceOk {}
@@ -316,7 +316,7 @@ export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
 
   async encode(e: Encoder): Promise<void> {
     let bufPayload = new Uint8Array();
-    bufPayload = appendString(this.trackNamespace, bufPayload);
+    bufPayload = appendVarint(this.reqeustID, bufPayload);
 
     const wholePacket = addHeader(this.type, new Uint8Array());
     e.writeBytes(wholePacket);
@@ -325,7 +325,7 @@ export class AnnounceOkEncoder implements AnnounceOk, MessageEncoder {
 
 export interface AnnounceError {
   type: ControlMessageType.AnnounceError;
-  trackNamespace: string;
+  reqeustID: varint;
   errorCode: varint;
   reasonPhrase: string;
 }
@@ -339,7 +339,7 @@ export class AnnounceErrorEncoder implements AnnounceError, MessageEncoder {
 
   async encode(e: Encoder): Promise<void> {
     let bufPayload = new Uint8Array();
-    bufPayload = appendString(this.trackNamespace, bufPayload);
+    bufPayload = appendVarint(this.reqeustID, bufPayload);
     bufPayload = appendVarint(this.errorCode, bufPayload);
     bufPayload = appendString(this.reasonPhrase, bufPayload);
 
@@ -371,6 +371,27 @@ export class UnannounceEncoder implements Unannounce, MessageEncoder {
 
 export interface AnnounceCancel {
   type: ControlMessageType.AnnounceCancel;
+  trackNamespace: string;
+  errorCode: varint;
+  reasonPhrase: string;
+}
+
+export interface AnnounceCancelEncoder extends AnnounceCancel {}
+
+export class AnnounceCancelEncoder implements AnnounceCancel, MessageEncoder {
+  constructor(m: Unannounce) {
+    Object.assign(this, m);
+  }
+
+  async encode(e: Encoder): Promise<void> {
+    let bufPayload = new Uint8Array();
+    bufPayload = appendString(this.trackNamespace, bufPayload);
+    bufPayload = appendVarint(this.errorCode, bufPayload);
+    bufPayload = appendString(this.reasonPhrase, bufPayload);
+
+    const wholePacket = addHeader(this.type, new Uint8Array());
+    e.writeBytes(wholePacket);
+  }
 }
 
 export interface GoAway {
@@ -462,6 +483,26 @@ export class ParameterEncoder implements Parameter {
     buf = appendVarint(this.type, buf);
     buf = appendVarint(this.value.byteLength, buf);
     buf = appendUint8Arr(buf, this.value);
+
+    return buf;
+  }
+}
+
+export interface LocationMoQ {
+  group: varint;
+  object: varint;
+}
+
+export interface LocationEncoder extends LocationMoQ {}
+
+export class LocationEncoder implements LocationMoQ {
+  constructor(l: LocationMoQ) {
+    Object.assign(this, l);
+  }
+
+  async append(buf: Uint8Array): Promise<Uint8Array> {
+    buf = appendVarint(this.group, buf);
+    buf = appendVarint(this.object, buf);
 
     return buf;
   }
