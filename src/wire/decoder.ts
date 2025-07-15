@@ -42,37 +42,66 @@ class Decoder {
     this.buffer = new Uint8Array(8);
   }
 
-  async read(
-    buffer: Uint8Array,
-    offset: number,
-    length: number
-  ): Promise<Uint8Array> {
+  async read(buffer: Uint8Array): Promise<Uint8Array> {
+    console.log("before: ", buffer);
     const reader = this.reader.getReader({ mode: "byob" });
-    while (offset < length) {
-      const buf = new Uint8Array(
+    const end = buffer.byteLength + buffer.byteOffset;
+    const oriOffset = buffer.byteOffset;
+    let offset = 0;
+
+    while (offset < buffer.byteLength) {
+      const view = new Uint8Array(
         buffer.buffer,
         buffer.byteOffset + offset,
-        length - offset
+        buffer.byteLength - offset
       );
-      const { value, done } = await reader.read(buf);
+      const { value, done } = await reader.read(view);
       if (done) {
         throw new StreamDoneError();
       }
+      offset += value.byteLength;
+
       buffer = new Uint8Array(
         value.buffer,
-        value.byteOffset - offset,
-        length - offset
+        value.byteOffset + value.byteLength,
+        end - value.byteOffset - value.byteLength
       );
-      offset += value.byteLength;
     }
+
     reader.releaseLock();
-    return buffer;
+
+    const buf = new Uint8Array(buffer.buffer, oriOffset, end - oriOffset);
+
+    console.log(buf);
+
+    return buf;
+
+    // while (offset < length) {
+    // const buf = new Uint8Array(
+    //   buffer.buffer,
+    //   buffer.byteOffset + offset,
+    //   length - offset
+    // );
+    //   const { value, done } = await reader.read(buf);
+    //   if (done) {
+    //     throw new StreamDoneError();
+    //   }
+    //   buffer = new Uint8Array(
+    //     value.buffer,
+    //     value.byteOffset - offset,
+    //     length - offset
+    //   );
+    //   offset += value.byteLength;
+    // }
+    // reader.releaseLock();
+    // return buffer;
   }
 
+  // read reads exacly length bytes
   async readN(n: number): Promise<Uint8Array> {
     const buffer = new Uint8Array(n);
-    const data = await this.read(buffer, 0, n);
-    return data;
+    await this.read(buffer);
+    return buffer;
   }
 
   async readAll(): Promise<Uint8Array> {
@@ -93,10 +122,7 @@ class Decoder {
   }
 
   async readUint16(): Promise<number> {
-    this.buffer = await this.read(this.buffer, 0, 2);
-    if (this.buffer.length !== 2) {
-      throw new Error("readUint16 failed");
-    }
+    await this.read(this.buffer.slice(0, 2));
 
     // TODO: actually use parse field
     // currently irrelevant because we do not compare it to the actual length
@@ -104,16 +130,12 @@ class Decoder {
   }
 
   async readUint8(): Promise<number> {
-    return (await this.readN(1))[0]!
+    return (await this.readN(1))[0]!;
   }
 
   async readVarint(): Promise<varint> {
-    this.buffer = await this.read(this.buffer, 0, 1);
-    if (this.buffer.length !== 1) {
-      var errStr =
-        "readVarint could not read first byte. Len: " + this.buffer.length;
-      throw new Error(errStr);
-    }
+    this.buffer = await this.read(this.buffer.slice(0, 1));
+
     const prefix = this.buffer[0]! >> 6;
     const length = 1 << prefix;
     let view = new DataView(this.buffer.buffer, 0, length);
@@ -121,15 +143,15 @@ class Decoder {
       case 1:
         return view.getUint8(0) & 0x3f;
       case 2:
-        this.buffer = await this.read(this.buffer, 1, 2);
+        await this.read(this.buffer.slice(1, 2));
         view = new DataView(this.buffer.buffer, 0, length);
         return view.getUint16(0) & 0x3fff;
       case 4:
-        this.buffer = await this.read(this.buffer, 1, 4);
+        await this.read(this.buffer.slice(1, 4));
         view = new DataView(this.buffer.buffer, 0, length);
         return view.getUint32(0) & 0x3fffffff;
       case 8:
-        this.buffer = await this.read(this.buffer, 1, 8);
+        await this.read(this.buffer.slice(1, 8));
         view = new DataView(this.buffer.buffer, 0, length);
         return view.getBigUint64(0) & 0x3fffffffffffffffn;
     }
@@ -251,7 +273,7 @@ class Decoder {
     };
   }
 
-    async announceCancel(): Promise<AnnounceCancel> {
+  async announceCancel(): Promise<AnnounceCancel> {
     return {
       type: ControlMessageType.AnnounceCancel,
       trackNamespace: await this.tuplestring(),
@@ -329,10 +351,19 @@ class Decoder {
     if (length === 0) {
       objectStatus = await this.readVarint();
     }
+
+    let payload = await this.readN(<number>length);
+    console.assert(
+      payload.byteLength == length,
+      "Wrong length ",
+      payload.byteLength,
+      length
+    );
+
     return {
       objectId,
       objectStatus,
-      objectPayload: await this.readN(<number>length),
+      objectPayload: payload,
     };
   }
 
@@ -348,9 +379,9 @@ class Decoder {
   }
   async tuplestring(): Promise<string> {
     const numOfTuples = await this.readVarint();
-    let namespace:string = "";
+    let namespace: string = "";
     for (let i = 0; i < numOfTuples; i++) {
-      namespace.concat(await this.string())
+      namespace.concat(await this.string());
     }
 
     return namespace;
