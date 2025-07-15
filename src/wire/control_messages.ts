@@ -188,6 +188,7 @@ export class SubscribeOkEncoder implements SubscribeOk, MessageEncoder {
         bufPayload
       );
     }
+    bufPayload = appendVarint(this.subscribeParameters.length, bufPayload);
     for (const p of this.subscribeParameters) {
       bufPayload = await new ParameterEncoder(p).append(bufPayload);
     }

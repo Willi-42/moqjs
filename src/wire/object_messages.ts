@@ -1,6 +1,6 @@
 import type { MessageEncoder } from "./control_messages";
 import { addHeader, Encoder } from "./encoder";
-import { type varint, appendVarint, appendNumber, appendBytes } from "./varint";
+import { type varint, appendVarint, appendNumber, appendBytes, appendUInt16 } from "./varint";
 
 export type ObjectMessage = ObjectMsg;
 
@@ -44,9 +44,17 @@ export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
   }
 
   async encode(e: Encoder): Promise<void> {
-    console.log("can't sent anything yet");
+    let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(StreamHeaderType.SubgroupNoSubID, bufPayload);
+    bufPayload = appendVarint(0, bufPayload); // alias
+    bufPayload = appendVarint(0, bufPayload); // groupid
+    bufPayload = appendNumber(0, bufPayload); // priority
 
-    // let bufPayload = new Uint8Array();
+    bufPayload = appendVarint(this.objectId, bufPayload);
+    bufPayload = appendVarint(this.objectPayload.length, bufPayload);
+    bufPayload = appendBytes(this.objectPayload, bufPayload);
+
+
 
     // if (this.type === ControlMessageType.ObjectStream || this.type === ControlMessageType.ObjectDatagram) {
     //   bufPayload = appendVarint(this.type, bufPayload);
@@ -83,6 +91,6 @@ export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
     // else {
     //   throw new Error(`cannot encode unknown message type ${this.type}`);
     // }
-    // e.writeBytes(bufPayload)
+    return e.writeBytes(bufPayload)
   }
 }

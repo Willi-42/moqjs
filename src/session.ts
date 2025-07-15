@@ -1,4 +1,4 @@
-import { ControlStream } from "./wire/control_stream";
+import { ControlStream } from "./control_stream";
 import { ControlStreamDecoder, ObjectStreamDecoder } from "./wire/decoder";
 import { Encoder } from "./wire/encoder";
 import {
@@ -6,11 +6,19 @@ import {
   ControlMessageType,
   SubscribeEncoder,
   UnsubscribeEncoder,
+  SubscribeOkEncoder,
+  SubscribeErrorEncoder,
 } from "./wire/control_messages";
 import { Subscription } from "./subscription";
-import type { ControlMessage } from "./wire/control_messages";
+import type {
+  ControlMessage,
+  Subscribe,
+  SubscribeError,
+  SubscribeOk,
+} from "./wire/control_messages";
 import type { varint } from "./wire/varint";
 import type { ObjectMsgWithHeader } from "./wire/object_messages";
+import { Publisher } from "./publisher";
 
 // so that tsup doesn't complain when producing the ts declaration file
 type WebTransportReceiveStream = any;
@@ -28,10 +36,17 @@ export class Session {
   conn: WebTransport;
   controlStream: ControlStream;
   subscriptions: Map<varint, Subscription>;
+  publishees: Map<varint, Publisher>; // one publsher class for each track
   nextSubscribeId: number = 0;
+
+  OnSubCallback: (
+    subscription: Subscribe,
+    writableStream: WritableStream
+  ) => SubscribeOk | SubscribeError;
 
   constructor(conn: WebTransport, cs: ControlStream) {
     this.subscriptions = new Map<varint, Subscription>();
+    this.publishees = new Map<varint, Publisher>();
 
     this.conn = conn;
     this.controlStream = cs;
@@ -39,6 +54,24 @@ export class Session {
 
     this.controlStream.runReadLoop();
     this.readIncomingUnidirectionalStreams(this.conn);
+    this.OnSubCallback = Session.DefaultOnSubCallback;
+  }
+
+  static DefaultOnSubCallback(
+    subscription: Subscribe,
+    writableStream: WritableStream
+  ): SubscribeOk | SubscribeError {
+    const reason = "Does not exist: " + subscription.trackName;
+
+    const error: SubscribeError = {
+      type: ControlMessageType.SubscribeError,
+      subscribeId: subscription.subscribeId,
+      errorCode: 4, // track does not exist
+      reasonPhrase: reason,
+      trackAlias: 0, // removed in draft 12
+    };
+
+    return error;
   }
 
   static async connect(url: string, serverCertificateHash?: string) {
@@ -76,6 +109,10 @@ export class Session {
     return new Session(conn, controlStream);
   }
 
+  async createNewStream(): Promise<WritableStream<any>> {
+    return this.conn.createUnidirectionalStream();
+  }
+
   async readIncomingUnidirectionalStreams(conn: WebTransport) {
     console.log("reading incoming streams");
     const uds = conn.incomingUnidirectionalStreams;
@@ -89,7 +126,6 @@ export class Session {
     }
   }
 
-  // @ts-ignore
   async readIncomingUniStream(stream: WebTransportReceiveStream) {
     console.log("got stream");
     const messageStream = new ReadableStream<ObjectMsgWithHeader>(
@@ -102,16 +138,11 @@ export class Session {
         console.log("stream closed");
         break;
       }
-      // console.log("got object", value);
       if (!this.subscriptions.has(value.subscribeId)) {
         throw new Error(
           `got object for unknown subscribeId: ${value.subscribeId}`
         );
       }
-      // console.log(
-      //   "writing to subscription",
-      //   this.subscriptions.get(value.subscribeId)
-      // );
       const writer = this.subscriptions
         .get(value.subscribeId)!
         .subscription.writable.getWriter();
@@ -121,9 +152,33 @@ export class Session {
   }
 
   async handle(m: ControlMessage) {
+    console.log("got control msg: ", m.type);
     switch (m.type) {
       case ControlMessageType.SubscribeOk:
         this.subscriptions.get(m.requestID)?.subscribeOk();
+        break;
+      case ControlMessageType.RequestBlocked:
+        console.log("Request blocked: " + m.maximumRequestID);
+        break;
+      case ControlMessageType.Subscribe:
+        // create writable stream that puts everything into webtransport
+        const writableStream = new WritableStream(
+          new Publisher(this.createNewStream.bind(this))
+        );
+        console.log("Handler got sub msg");
+
+        // TODO: save it for closing
+        const res = this.OnSubCallback!(m, writableStream);
+        switch (res.type) {
+          case ControlMessageType.SubscribeOk:
+            this.controlStream.send(new SubscribeOkEncoder(res));
+            break;
+
+          case ControlMessageType.SubscribeError:
+            this.controlStream.send(new SubscribeErrorEncoder(res));
+            break;
+        }
+        break;
     }
   }
 

@@ -3,8 +3,8 @@ import {
   ClientSetupEncoder,
   ControlMessageType,
   ParameterEncoder,
-} from "./control_messages";
-import type { ControlMessage, MessageEncoder } from "./control_messages";
+} from "./wire/control_messages";
+import type { ControlMessage, MessageEncoder } from "./wire/control_messages";
 
 export class ControlStream {
   readerPassedMsgs: ReadableStream<ControlMessage>;
@@ -25,6 +25,7 @@ export class ControlStream {
         versions: [CURRENT_SUPPORTED_DRAFT],
         parameters: [
           new ParameterEncoder({ type: 0, value: new Uint8Array([0x2]) }),
+          new ParameterEncoder({ type: 2, value: new Uint8Array([0xa]) }),
         ],
       }),
     );
