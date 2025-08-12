@@ -1,8 +1,19 @@
 import type { MessageEncoder } from "./control_messages";
 import { addHeader, Encoder } from "./encoder";
-import { type varint, appendVarint, appendNumber, appendBytes, appendUInt16 } from "./varint";
+import {
+  type varint,
+  appendVarint,
+  appendNumber,
+  appendBytes,
+  appendUInt16,
+} from "./varint";
 
 export type ObjectMessage = ObjectMsg;
+
+enum ObjectStreamState {
+  Init,
+  Ready,
+}
 
 export enum DatagramMessageType {
   ObjectDatagram = 0x00,
@@ -38,59 +49,52 @@ export interface ObjectMsg {
 
 export interface ObjectStreamEncoder extends ObjectMsg {}
 
-export class ObjectStreamEncoder implements ObjectMsg, MessageEncoder {
-  constructor(m: ObjectMsg) {
-    Object.assign(this, m);
+export class ObjectStreamEncoder implements ObjectMsg {
+  state: ObjectStreamState;
+  groupId: varint;
+  subgroupID: varint;
+  priority: number;
+  baseEncoder: Encoder;
+  trackAlias: varint;
+
+  constructor(
+    groupId: varint,
+    subgroupID: varint,
+    priority: number,
+    encoder: Encoder,
+    trackAlias: varint
+  ) {
+    this.state = ObjectStreamState.Init;
+    this.groupId = groupId;
+    this.subgroupID = subgroupID;
+    this.priority = priority;
+    this.baseEncoder = encoder;
+    this.trackAlias = trackAlias;
   }
 
-  async encode(e: Encoder): Promise<void> {
+  async encode(m: ObjectMessage): Promise<void> {
     let bufPayload = new Uint8Array();
-    bufPayload = appendVarint(StreamHeaderType.SubgroupNoSubID, bufPayload);
-    bufPayload = appendVarint(0, bufPayload); // alias
-    bufPayload = appendVarint(0, bufPayload); // groupid
-    bufPayload = appendNumber(0, bufPayload); // priority
 
-    bufPayload = appendVarint(this.objectId, bufPayload);
-    bufPayload = appendVarint(this.objectPayload.length, bufPayload);
-    bufPayload = appendBytes(this.objectPayload, bufPayload);
+    if (this.state == ObjectStreamState.Init) {
+      // send header first
 
+      bufPayload = appendVarint(
+        StreamHeaderType.SubgroupSubIDpresent,
+        bufPayload
+      );
+      bufPayload = appendVarint(this.trackAlias, bufPayload); // alias
+      bufPayload = appendVarint(this.groupId, bufPayload); // groupid
+      bufPayload = appendVarint(this.subgroupID, bufPayload); // subGroupID
+      bufPayload = appendNumber(this.priority, bufPayload); // priority
 
+      this.state = ObjectStreamState.Ready;
+    }
 
-    // if (this.type === ControlMessageType.ObjectStream || this.type === ControlMessageType.ObjectDatagram) {
-    //   bufPayload = appendVarint(this.type, bufPayload);
-    //   bufPayload = appendVarint(this.subscribeId, bufPayload);
-    //   bufPayload = appendVarint(this.trackAlias, bufPayload);
-    //   bufPayload = appendVarint(this.groupId, bufPayload);
-    //   bufPayload = appendVarint(this.objectId, bufPayload);
-    //   bufPayload = appendNumber(this.publisherPriority, bufPayload);
-    //   bufPayload = appendVarint(this.objectStatus, bufPayload);
-    //   bufPayload = appendBytes(this.objectPayload, bufPayload);
-    // }
-    // if (this.type === ControlMessageType.StreamHeaderTrack) {
-    //   bufPayload = appendVarint(this.groupId, bufPayload);
-    //   bufPayload = appendVarint(this.objectId, bufPayload);
-    //   bufPayload = appendVarint(this.objectPayload.length, bufPayload);
-    //   if (this.objectPayload.length === 0) {
-    //     bufPayload = appendVarint(this.objectStatus, bufPayload);
-    //   }
-    //   else {
-    //     bufPayload = appendBytes(this.objectPayload, bufPayload);
-    //   }
+    // encode message
+    bufPayload = appendVarint(m.objectId, bufPayload);
+    bufPayload = appendVarint(m.objectPayload.length, bufPayload);
+    bufPayload = appendBytes(m.objectPayload, bufPayload);
 
-    // }
-    // if (this.type === ControlMessageType.StreamHeaderGroup) {
-    //   bufPayload = appendVarint(this.objectId, bufPayload);
-    //   bufPayload = appendVarint(this.objectPayload.length, bufPayload);
-    //   if (this.objectPayload.length === 0) {
-    //     bufPayload = appendVarint(this.objectStatus, bufPayload);
-    //   }
-    //   else {
-    //     bufPayload = appendBytes(this.objectPayload, bufPayload);
-    //   }
-    // }
-    // else {
-    //   throw new Error(`cannot encode unknown message type ${this.type}`);
-    // }
-    return e.writeBytes(bufPayload)
+    return this.baseEncoder.writeBytes(bufPayload);
   }
 }

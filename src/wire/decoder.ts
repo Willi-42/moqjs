@@ -35,73 +35,53 @@ class StreamDoneError extends Error {}
 
 class Decoder {
   reader: ReadableStream<Uint8Array>;
-  buffer: Uint8Array;
 
   constructor(stream: ReadableStream<Uint8Array>) {
     this.reader = stream;
-    this.buffer = new Uint8Array(8);
   }
 
-  async read(buffer: Uint8Array): Promise<Uint8Array> {
-    console.log("before: ", buffer);
+  async read(view: Uint8Array): Promise<Uint8Array> {
     const reader = this.reader.getReader({ mode: "byob" });
-    const end = buffer.byteLength + buffer.byteOffset;
-    const oriOffset = buffer.byteOffset;
-    let offset = 0;
 
-    while (offset < buffer.byteLength) {
-      const view = new Uint8Array(
-        buffer.buffer,
-        buffer.byteOffset + offset,
-        buffer.byteLength - offset
-      );
+    let offset = 0;
+    let initLen = view.byteLength;
+    // let view = buffer.subarray(0, buffer.byteLength);
+
+    console.log("start read: gonna read: ", view.byteLength);
+
+    let tvalue: Uint8Array<ArrayBufferLike> | undefined;
+    while (offset < view.byteLength) {
       const { value, done } = await reader.read(view);
+      tvalue = value;
       if (done) {
         throw new StreamDoneError();
       }
       offset += value.byteLength;
 
-      buffer = new Uint8Array(
+      view = new Uint8Array(
         value.buffer,
         value.byteOffset + value.byteLength,
-        end - value.byteOffset - value.byteLength
+        initLen - value.byteLength
       );
+
+      console.log("after iter: ", view);
     }
+
+    console.log("end read");
 
     reader.releaseLock();
 
-    const buf = new Uint8Array(buffer.buffer, oriOffset, end - oriOffset);
-
-    console.log(buf);
-
-    return buf;
-
-    // while (offset < length) {
-    // const buf = new Uint8Array(
-    //   buffer.buffer,
-    //   buffer.byteOffset + offset,
-    //   length - offset
-    // );
-    //   const { value, done } = await reader.read(buf);
-    //   if (done) {
-    //     throw new StreamDoneError();
-    //   }
-    //   buffer = new Uint8Array(
-    //     value.buffer,
-    //     value.byteOffset - offset,
-    //     length - offset
-    //   );
-    //   offset += value.byteLength;
-    // }
-    // reader.releaseLock();
-    // return buffer;
+    console.assert(!tvalue!.buffer.detached);
+    return new Uint8Array(tvalue.buffer, 0, tvalue.buffer.byteLength);
   }
 
   // read reads exacly length bytes
   async readN(n: number): Promise<Uint8Array> {
+    if (n == 0) return new Uint8Array();
+
     const buffer = new Uint8Array(n);
-    await this.read(buffer);
-    return buffer;
+    const value = await this.read(buffer);
+    return value;
   }
 
   async readAll(): Promise<Uint8Array> {
@@ -122,7 +102,8 @@ class Decoder {
   }
 
   async readUint16(): Promise<number> {
-    await this.read(this.buffer.slice(0, 2));
+    let buffer = new Uint8Array(8);
+    await this.read(buffer.subarray(0, 2));
 
     // TODO: actually use parse field
     // currently irrelevant because we do not compare it to the actual length
@@ -134,25 +115,38 @@ class Decoder {
   }
 
   async readVarint(): Promise<varint> {
-    this.buffer = await this.read(this.buffer.slice(0, 1));
+    let buffer = new Uint8Array(10);
 
-    const prefix = this.buffer[0]! >> 6;
+    console.log("rigth before read varint");
+    console.trace();
+    console.log("buffer before: ", buffer);
+    buffer = await this.read(buffer.subarray(0, 1));
+    console.log("buffer after: ", buffer);
+
+    const prefix = buffer[0]! >> 6;
     const length = 1 << prefix;
-    let view = new DataView(this.buffer.buffer, 0, length);
+
+    let view = new DataView(buffer.buffer, 0, length);
     switch (length) {
       case 1:
+        console.log("varint 1");
         return view.getUint8(0) & 0x3f;
       case 2:
-        await this.read(this.buffer.slice(1, 2));
-        view = new DataView(this.buffer.buffer, 0, length);
+        console.log("varint 2");
+        buffer = await this.read(buffer.subarray(1, 2));
+        view = new DataView(buffer.buffer, 0, length);
         return view.getUint16(0) & 0x3fff;
       case 4:
-        await this.read(this.buffer.slice(1, 4));
-        view = new DataView(this.buffer.buffer, 0, length);
+        console.log("varint 4");
+
+        buffer = await this.read(buffer.subarray(1, 4));
+        view = new DataView(buffer.buffer, 0, length);
         return view.getUint32(0) & 0x3fffffff;
       case 8:
-        await this.read(this.buffer.slice(1, 8));
-        view = new DataView(this.buffer.buffer, 0, length);
+        console.log("varint 8");
+
+        buffer = await this.read(buffer.subarray(1, 8));
+        view = new DataView(buffer.buffer, 0, length);
         return view.getBigUint64(0) & 0x3fffffffffffffffn;
     }
     throw new Error("invalid varint length");
@@ -312,6 +306,9 @@ class Decoder {
 
   async serverSetup(): Promise<ServerSetup> {
     var selectedVersion = await this.readVarint();
+
+    console.log("server Setup: Selected Version: ", selectedVersion);
+
     var parameter = await this.parameters();
 
     return {
@@ -414,6 +411,7 @@ class Decoder {
 
   async parameters(): Promise<Parameter[]> {
     const numOfParameters = await this.readVarint();
+    console.log("num of paras: ", numOfParameters);
     const parameters = [];
     for (let i = 0; i < numOfParameters; i++) {
       parameters.push(await this.parameter());
