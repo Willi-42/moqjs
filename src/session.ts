@@ -18,7 +18,7 @@ import type {
 } from "./wire/control_messages";
 import type { varint } from "./wire/varint";
 import type { ObjectMsgWithHeader } from "./wire/object_messages";
-import { Publisher } from "./publisher";
+import { Publisher, SubGroup } from "./publisher";
 
 // so that tsup doesn't complain when producing the ts declaration file
 type WebTransportReceiveStream = any;
@@ -36,17 +36,17 @@ export class Session {
   conn: WebTransport;
   controlStream: ControlStream;
   subscriptions: Map<varint, Subscription>;
-  publishees: Map<varint, Publisher>; // one publsher class for each track
+  publishees: Map<varint, SubGroup>; // one publsher class for each track
   nextSubscribeId: number = 0;
 
   OnSubCallback: (
     subscription: Subscribe,
-    writableStream: WritableStream
+    publisher: Publisher
   ) => SubscribeOk | SubscribeError;
 
   constructor(conn: WebTransport, cs: ControlStream) {
     this.subscriptions = new Map<varint, Subscription>();
-    this.publishees = new Map<varint, Publisher>();
+    this.publishees = new Map<varint, SubGroup>();
 
     this.conn = conn;
     this.controlStream = cs;
@@ -59,7 +59,7 @@ export class Session {
 
   static DefaultOnSubCallback(
     subscription: Subscribe,
-    writableStream: WritableStream
+    publisher: Publisher
   ): SubscribeOk | SubscribeError {
     const reason = "Does not exist: " + subscription.trackName;
 
@@ -162,13 +162,12 @@ export class Session {
         break;
       case ControlMessageType.Subscribe:
         // create writable stream that puts everything into webtransport
-        const writableStream = new WritableStream(
-          new Publisher(this.createNewStream.bind(this))
-        );
+         let publisher =  new Publisher(this.createNewStream.bind(this))
+        
         console.log("Handler got sub msg");
 
         // TODO: save it for closing
-        const res = this.OnSubCallback!(m, writableStream);
+        const res = this.OnSubCallback!(m, publisher);
         switch (res.type) {
           case ControlMessageType.SubscribeOk:
             this.controlStream.send(new SubscribeOkEncoder(res));
