@@ -43,36 +43,42 @@ class Decoder {
   async read(view: Uint8Array): Promise<Uint8Array> {
     const reader = this.reader.getReader({ mode: "byob" });
 
-    let offset = 0;
-    let initLen = view.byteLength;
+    // let offset = 0;
+    const initLen = view.byteLength;
+    const initOffset = view.byteOffset;
     // let view = buffer.subarray(0, buffer.byteLength);
 
-    console.log("start read: gonna read: ", view.byteLength);
+    console.log("Reading ", initLen, " bytes from stream");
 
-    let tvalue: Uint8Array<ArrayBufferLike> | undefined;
-    while (offset < view.byteLength) {
+    while (view.byteLength > 0) {
+      const prevLen = view.byteLength;
       const { value, done } = await reader.read(view);
-      tvalue = value;
       if (done) {
+        console.log("webTransport read returned done");
         throw new StreamDoneError();
       }
-      offset += value.byteLength;
+      // offset += value.byteLength;
+
+      console.log(
+        "offset",
+        value.byteOffset + value.byteLength,
+        " len",
+        initLen - value.byteLength
+      );
 
       view = new Uint8Array(
         value.buffer,
         value.byteOffset + value.byteLength,
-        initLen - value.byteLength
+        prevLen - value.byteLength
       );
-
-      console.log("after iter: ", view);
     }
-
-    console.log("end read");
 
     reader.releaseLock();
 
-    console.assert(!tvalue!.buffer.detached);
-    return new Uint8Array(tvalue.buffer, 0, tvalue.buffer.byteLength);
+    console.assert(!view!.buffer.detached);
+
+    // return new Uint8Array(view.buffer, initOffset, initLen); // doesnt work
+    return new Uint8Array(view.buffer, 0, view.buffer.byteLength); // works
   }
 
   // read reads exacly length bytes
@@ -80,25 +86,16 @@ class Decoder {
     if (n == 0) return new Uint8Array();
 
     const buffer = new Uint8Array(n);
-    const value = await this.read(buffer);
-    return value;
-  }
+    console.assert(buffer.byteLength == n, "len correct");
+    console.assert(buffer.byteOffset == 0, "offset correct");
 
-  async readAll(): Promise<Uint8Array> {
-    const reader = this.reader.getReader();
-    let buffer = new Uint8Array();
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      const next = new Uint8Array(buffer.byteLength + value.byteLength);
-      next.set(buffer);
-      next.set(value, buffer.byteLength);
-      buffer = next;
-    }
-    reader.releaseLock();
-    return buffer;
+    // here is the only time we use read without subarray (creating a view)
+    const value = await this.read(buffer);
+
+    console.assert(value.byteLength == n, "len correct");
+    console.assert(value.byteOffset == 0, "offset correct");
+
+    return value;
   }
 
   async readUint16(): Promise<number> {
@@ -117,35 +114,33 @@ class Decoder {
   async readVarint(): Promise<varint> {
     let buffer = new Uint8Array(10);
 
-    console.log("rigth before read varint");
-    console.trace();
-    console.log("buffer before: ", buffer);
+    // TODO: only readvar int can actually be the problem
     buffer = await this.read(buffer.subarray(0, 1));
-    console.log("buffer after: ", buffer);
 
     const prefix = buffer[0]! >> 6;
     const length = 1 << prefix;
 
+    console.log(buffer);
+
     let view = new DataView(buffer.buffer, 0, length);
     switch (length) {
       case 1:
-        console.log("varint 1");
+        console.log("case 1", buffer);
         return view.getUint8(0) & 0x3f;
       case 2:
-        console.log("varint 2");
         buffer = await this.read(buffer.subarray(1, 2));
+        console.log("case 2", buffer);
         view = new DataView(buffer.buffer, 0, length);
         return view.getUint16(0) & 0x3fff;
       case 4:
-        console.log("varint 4");
-
         buffer = await this.read(buffer.subarray(1, 4));
+        console.log("case 4", buffer);
         view = new DataView(buffer.buffer, 0, length);
         return view.getUint32(0) & 0x3fffffff;
       case 8:
-        console.log("varint 8");
-
         buffer = await this.read(buffer.subarray(1, 8));
+        console.log("case 8", buffer);
+
         view = new DataView(buffer.buffer, 0, length);
         return view.getBigUint64(0) & 0x3fffffffffffffffn;
     }
@@ -349,7 +344,9 @@ class Decoder {
       objectStatus = await this.readVarint();
     }
 
-    let payload = await this.readN(<number>length);
+    console.log("Reading payload with length ", <number>length);
+
+    const payload = await this.readN(<number>length);
     console.assert(
       payload.byteLength == length,
       "Wrong length ",
@@ -411,7 +408,6 @@ class Decoder {
 
   async parameters(): Promise<Parameter[]> {
     const numOfParameters = await this.readVarint();
-    console.log("num of paras: ", numOfParameters);
     const parameters = [];
     for (let i = 0; i < numOfParameters; i++) {
       parameters.push(await this.parameter());
@@ -470,7 +466,7 @@ export class ControlStreamDecoder extends Decoder {
 
 export class ObjectStreamDecoder extends Decoder {
   state: EncoderState;
-  subscribeId?: varint;
+  subgroupID?: varint;
   trackAlias?: varint;
   groupId?: varint;
   publisherPriority?: number;
@@ -495,7 +491,7 @@ export class ObjectStreamDecoder extends Decoder {
         const o = await this.streamObject(this.extensions);
 
         return controller.enqueue({
-          subscribeId: this.subscribeId!,
+          subgroupID: this.subgroupID!,
           trackAlias: this.trackAlias!,
           groupId: this.groupId!,
           publisherPriority: this.publisherPriority!,
@@ -506,7 +502,6 @@ export class ObjectStreamDecoder extends Decoder {
       // first message in stream -> decode header first
 
       const rawMt = await this.readVarint();
-      console.log("decoding message type", rawMt);
 
       // check if valid message type
       const headerValuies = Object.values(StreamHeaderType);
@@ -551,7 +546,7 @@ export class ObjectStreamDecoder extends Decoder {
       this.groupId = await this.readVarint();
 
       if (!(this.NoSubID && this.SubIDisFirstObjectID)) {
-        this.subscribeId = await this.readVarint();
+        this.subgroupID = await this.readVarint();
       }
 
       this.publisherPriority = await this.readUint8();
@@ -562,18 +557,24 @@ export class ObjectStreamDecoder extends Decoder {
       const o = await this.streamObject(this.extensions);
 
       if (this.SubIDisFirstObjectID) {
-        this.subscribeId = o.objectId;
+        this.subgroupID = o.objectId;
       }
 
       return controller.enqueue({
-        subscribeId: this.subscribeId!,
+        subgroupID: this.subgroupID!,
         trackAlias: this.trackAlias!,
         groupId: this.groupId,
         publisherPriority: this.publisherPriority!,
         msg: o,
       });
-    } catch (StreamDoneError) {
-      controller.close();
+    } catch (e) {
+      if (e instanceof StreamDoneError) {
+        console.log("error in read: stream done error");
+        controller.close();
+      } else {
+        console.log("other error in read: ", e);
+        throw e; // rethrow other errors
+      }
     }
   }
 }

@@ -132,19 +132,22 @@ export class Session {
       new ObjectStreamDecoder(stream)
     );
     const reader = messageStream.getReader();
+
+    // reader loop
     for (;;) {
       const { value, done } = await reader.read();
       if (done) {
-        console.log("stream closed");
+        console.log("stream closed!");
         break;
       }
-      if (!this.subscriptions.has(value.subscribeId)) {
+
+      if (!this.subscriptions.has(value.trackAlias)) {
         throw new Error(
-          `got object for unknown subscribeId: ${value.subscribeId}`
+          `got object for unknown track alias: ${value.trackAlias}`
         );
       }
       const writer = this.subscriptions
-        .get(value.subscribeId)!
+        .get(value.trackAlias)!
         .subscription.writable.getWriter();
       await writer.write(value);
       writer.releaseLock();
@@ -162,8 +165,8 @@ export class Session {
         break;
       case ControlMessageType.Subscribe:
         // create writable stream that puts everything into webtransport
-         let publisher =  new Publisher(this.createNewStream.bind(this))
-        
+        let publisher = new Publisher(this.createNewStream.bind(this));
+
         console.log("Handler got sub msg");
 
         // TODO: save it for closing
@@ -188,7 +191,7 @@ export class Session {
   ): Promise<{ subscribeId: number; readableStream: ReadableStream }> {
     const subId = this.nextSubscribeId++;
     const s = new Subscription(subId);
-    this.subscriptions.set(subId, s);
+    this.subscriptions.set(subId, s); // use subID as trackalias
     await this.controlStream.send(
       new SubscribeEncoder({
         type: ControlMessageType.Subscribe,

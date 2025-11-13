@@ -33,10 +33,10 @@ export enum StreamHeaderType {
 }
 
 export interface ObjectMsgWithHeader {
-  subscribeId: varint;
   trackAlias: varint;
   groupId: varint;
   publisherPriority: number;
+  subgroupID: varint;
 
   msg: ObjectMsg;
 }
